@@ -1,13 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
 import {
   getGroup,
   getGroupBalances,
   getGroupMembers,
   getGroupSettlements,
   getLedgerForPairwise,
-  isMember,
 } from "@/lib/db/queries";
 import { simplifyDebts } from "@/lib/ledger/simplify";
 import { computePairwiseDebts } from "@/lib/ledger/balances";
@@ -20,10 +18,9 @@ import {
 export default async function SettlePage(props: {
   params: Promise<{ groupId: string }>;
 }) {
-  const user = await requireUser();
   const { groupId } = await props.params;
   const group = getGroup(groupId);
-  if (!group || !isMember(groupId, user.id)) notFound();
+  if (!group) notFound();
 
   const members = getGroupMembers(groupId);
   const balances = getGroupBalances(groupId);
@@ -33,11 +30,7 @@ export default async function SettlePage(props: {
   const settlements = getGroupSettlements(groupId).slice(0, 10);
   const nameOf = (id: string) => members.find((m) => m.id === id)?.name ?? "?";
 
-  const memberOptions = members.map((m) => ({
-    id: m.id,
-    name: m.name,
-    isGhost: m.email === null,
-  }));
+  const memberOptions = members.map((m) => ({ id: m.id, name: m.name }));
 
   return (
     <div className="space-y-6">
@@ -88,7 +81,6 @@ export default async function SettlePage(props: {
           groupId={groupId}
           currency={group.currency}
           members={memberOptions}
-          currentUserId={user.id}
           overpayWarnings={Object.fromEntries(pairwise)}
         />
       </section>

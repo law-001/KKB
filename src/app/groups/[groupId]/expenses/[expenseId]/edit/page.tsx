@@ -1,16 +1,14 @@
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
-import { getExpenseDetail, getGroup, getGroupMembers, isMember } from "@/lib/db/queries";
+import { getExpenseDetail, getGroup, getGroupMembers } from "@/lib/db/queries";
 import { updateExpense } from "@/server/expenses";
 import { ExpenseForm } from "@/components/expense-form";
 
 export default async function EditExpensePage(props: {
   params: Promise<{ groupId: string; expenseId: string }>;
 }) {
-  const user = await requireUser();
   const { groupId, expenseId } = await props.params;
   const group = getGroup(groupId);
-  if (!group || !isMember(groupId, user.id)) notFound();
+  if (!group) notFound();
 
   const detail = getExpenseDetail(expenseId);
   if (
@@ -23,7 +21,6 @@ export default async function EditExpensePage(props: {
   const members = getGroupMembers(groupId).map((m) => ({
     id: m.id,
     name: m.name,
-    isGhost: m.email === null,
   }));
 
   return (
@@ -37,7 +34,7 @@ export default async function EditExpensePage(props: {
         groupId={groupId}
         currency={group.currency}
         members={members}
-        currentUserId={user.id}
+        defaultPayerId={members[0]?.id ?? ""}
         initial={{
           description: detail.expense.description,
           totalCents: detail.expense.totalCents,

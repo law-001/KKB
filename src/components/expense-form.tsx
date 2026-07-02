@@ -13,7 +13,6 @@ import type { ExpensePayload } from "@/lib/expense-payload";
 export interface MemberOption {
   id: string;
   name: string;
-  isGhost: boolean;
 }
 
 interface PayerRow {
@@ -61,14 +60,14 @@ export function ExpenseForm({
   groupId,
   currency,
   members,
-  currentUserId,
+  defaultPayerId,
   initial,
   submitAction,
 }: {
   groupId: string;
   currency: string;
   members: MemberOption[];
-  currentUserId: string;
+  defaultPayerId: string;
   initial?: {
     description: string;
     totalCents: number;
@@ -101,7 +100,7 @@ export function ExpenseForm({
     initial?.payers.map((p) => ({
       userId: p.userId,
       amountStr: toAmountStr(p.amountCents),
-    })) ?? [{ userId: currentUserId, amountStr: "" }],
+    })) ?? [{ userId: defaultPayerId, amountStr: "" }],
   );
 
   // ── Split method state ─────────────────────────────────────────────────
@@ -146,7 +145,7 @@ export function ExpenseForm({
   const [owerId, setOwerId] = useState<string>(
     initialSplit?.method === "adjustment"
       ? initialSplit.owerId
-      : (members.find((m) => m.id !== currentUserId)?.id ?? members[0]?.id ?? ""),
+      : (members.find((m) => m.id !== defaultPayerId)?.id ?? members[0]?.id ?? ""),
   );
 
   // "Bayad" — cash each person hands over at the table. Purely a table-side
@@ -416,7 +415,6 @@ export function ExpenseForm({
                 {members.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
-                    {m.isGhost ? " (ghost)" : ""}
                   </option>
                 ))}
               </select>

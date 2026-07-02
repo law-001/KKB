@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
-import { getActivityFeed, getGroup, isMember } from "@/lib/db/queries";
+import { getActivityFeed, getGroup } from "@/lib/db/queries";
 import { formatCents } from "@/lib/ledger/money";
 
 function describe(
@@ -22,8 +21,9 @@ function describe(
       return `${actor} created the group`;
     case "member.joined":
       return `${p.memberName ?? actor} joined the group`;
-    case "member.ghost_added":
-      return `${actor} added ${p.memberName} (no account yet)`;
+    case "member.added":
+    case "member.ghost_added": // legacy verb from the accounts era
+      return `${p.memberName ?? actor} was added to the group`;
     case "expense.created":
       return `${actor} added "${p.description}" — ${amount} (${p.method})`;
     case "expense.edited":
@@ -46,10 +46,9 @@ function describe(
 export default async function ActivityPage(props: {
   params: Promise<{ groupId: string }>;
 }) {
-  const user = await requireUser();
   const { groupId } = await props.params;
   const group = getGroup(groupId);
-  if (!group || !isMember(groupId, user.id)) notFound();
+  if (!group) notFound();
 
   const feed = getActivityFeed(groupId);
 

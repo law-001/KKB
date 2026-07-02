@@ -1,10 +1,10 @@
 "use client";
 
 import { useActionState } from "react";
-import { addGhostMember, type FormState } from "@/server/groups";
+import { addMember, type FormState } from "@/server/groups";
 
-export function GhostMemberForm({ groupId }: { groupId: string }) {
-  const action = addGhostMember.bind(null, groupId);
+export function AddMemberForm({ groupId }: { groupId: string }) {
+  const action = addMember.bind(null, groupId);
   const [state, formAction, pending] = useActionState<FormState, FormData>(
     action,
     {},
@@ -15,7 +15,7 @@ export function GhostMemberForm({ groupId }: { groupId: string }) {
         name="name"
         required
         maxLength={80}
-        placeholder="Add member by name (no account needed)"
+        placeholder="Add member by name"
         className="flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:outline-none"
       />
       <button

@@ -1,23 +1,16 @@
 /**
  * Demo/dev seed: wipes the database and rebuilds it with a realistic group —
- * every split method, a ghost member, a backdated expense, settlements in all
- * three states — then verifies the zero-sum invariant against the same SQL
- * aggregate the app uses.
+ * every split method, a backdated expense, settlements — then verifies the
+ * zero-sum invariant against the same SQL aggregate the app uses.
  *
  * Run: npm run db:seed
- * Sign in afterwards as alex@example.com / password123 (or mia@/sam@ same pw).
+ * The app is open — no sign-in; just visit the group link it prints.
  */
-import { randomBytes, scryptSync } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db, tables } from "../src/lib/db";
 import { computeShares, type SplitInput } from "../src/lib/ledger/split";
 import { computeBalances, assertZeroSum } from "../src/lib/ledger/balances";
 import { simplifyDebts } from "../src/lib/ledger/simplify";
-
-function hashPassword(password: string): string {
-  const salt = randomBytes(16).toString("hex");
-  return `${salt}:${scryptSync(password, salt, 64).toString("hex")}`;
-}
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
 
@@ -38,31 +31,17 @@ for (const table of [
   db.run(sql.raw(`DELETE FROM ${table}`));
 }
 
-// ── Users ───────────────────────────────────────────────────────────────────
-const password = hashPassword("password123");
-const [alex, mia, sam] = db
+// ── Members (just names — the app has no accounts) ─────────────────────────
+const [alex, mia, sam, gab] = db
   .insert(tables.users)
   .values([
-    { name: "Alex", email: "alex@example.com", passwordHash: password },
-    { name: "Mia", email: "mia@example.com", passwordHash: password },
-    { name: "Sam", email: "sam@example.com", passwordHash: password },
+    { name: "Alex", email: null, passwordHash: null },
+    { name: "Mia", email: null, passwordHash: null },
+    { name: "Sam", email: null, passwordHash: null },
+    { name: "Gab", email: null, passwordHash: null },
   ])
   .returning()
   .all();
-const ghost = db
-  .insert(tables.users)
-  .values({ name: "Gab (ghost)", email: null, passwordHash: null })
-  .returning()
-  .get();
-
-// Fixed session token so scripted HTTP checks can authenticate as Alex.
-db.insert(tables.sessions)
-  .values({
-    token: "seed-alex-session-token",
-    userId: alex.id,
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-  })
-  .run();
 
 // ── Group ───────────────────────────────────────────────────────────────────
 const group = db
@@ -71,7 +50,6 @@ const group = db
     name: "Friday Dinner Crew",
     currency: "PHP",
     createdBy: alex.id,
-    inviteCode: "demo-invite",
   })
   .returning()
   .get();
@@ -80,7 +58,7 @@ db.insert(tables.groupMembers)
     { groupId: group.id, userId: alex.id, role: "admin" },
     { groupId: group.id, userId: mia.id, role: "member" },
     { groupId: group.id, userId: sam.id, role: "member" },
-    { groupId: group.id, userId: ghost.id, role: "member" },
+    { groupId: group.id, userId: gab.id, role: "member" },
   ])
   .run();
 
@@ -169,7 +147,7 @@ addExpense({
   totalCents: 120000,
   paidAt: daysAgo(5),
   payers: [{ userId: alex.id, amountCents: 120000 }],
-  split: { method: "even", participants: [alex.id, mia.id, sam.id, ghost.id] },
+  split: { method: "even", participants: [alex.id, mia.id, sam.id, gab.id] },
 });
 
 // 2. Itemized: "I only had a salad" — proportional service charge.
@@ -244,7 +222,7 @@ addExpense({
   split: { method: "adjustment", owerId: sam.id },
 });
 
-// ── Settlements: one confirmed, one pending, one rejected ──────────────────
+// ── Settlements (recorded immediately — the app has no confirmation step) ──
 db.insert(tables.settlements)
   .values([
     {
@@ -263,16 +241,7 @@ db.insert(tables.settlements)
       amountCents: 50000,
       method: "cash",
       settledAt: daysAgo(0),
-      status: "pending",
-    },
-    {
-      groupId: group.id,
-      fromUser: sam.id,
-      toUser: mia.id,
-      amountCents: 10000,
-      method: "cash",
-      settledAt: daysAgo(2),
-      status: "rejected",
+      status: "confirmed",
     },
   ])
   .run();
@@ -287,7 +256,7 @@ db.insert(tables.activityLog)
     {
       groupId: group.id,
       actorId: sam.id,
-      verb: "settlement.recorded",
+      verb: "settlement.confirmed",
       payload: { fromName: "Sam", toName: "Alex", amountCents: 50000, method: "cash" },
     },
   ])
@@ -321,7 +290,7 @@ const names = new Map([
   [alex.id, "Alex"],
   [mia.id, "Mia"],
   [sam.id, "Sam"],
-  [ghost.id, "Gab (ghost)"],
+  [gab.id, "Gab"],
 ]);
 console.log("Seeded. Balances (centavos, + = group owes them):");
 for (const [uid, cents] of balances) {
@@ -333,5 +302,4 @@ for (const t of simplifyDebts(balances)) {
   console.log(`  ${names.get(t.from)} -> ${names.get(t.to)}: ${t.amountCents}`);
 }
 console.log(`\nGroup: http://localhost:3000/groups/${group.id}`);
-console.log("Invite: http://localhost:3000/join/demo-invite");
-console.log("Sign in: alex@example.com / password123 (also mia@, sam@)");
+console.log("No sign-in — the app is open to everyone.");

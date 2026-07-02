@@ -1,38 +1,33 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
 import {
   getExpenseDetail,
   getGroup,
   getGroupExpenses,
   getGroupMembers,
   getGroupSettlements,
-  isMember,
 } from "@/lib/db/queries";
-import { computePairwiseDebts } from "@/lib/ledger/balances";
 import { formatCents } from "@/lib/ledger/money";
 
 /**
- * The per-pair drill-down: "Alex ↔ You", every expense and settlement between
- * the two with a running subtotal. This screen is what builds trust in the
- * numbers — it's a filtered scan of the same append-only ledger.
+ * A member's full tab: every expense and settlement that touched their
+ * balance, with a running subtotal. This screen is what builds trust in the
+ * numbers — it's a filtered scan of the same append-only ledger, and its
+ * final line always equals the balance on the group page.
  */
-export default async function MemberPairPage(props: {
+export default async function MemberTabPage(props: {
   params: Promise<{ groupId: string; memberId: string }>;
 }) {
-  const user = await requireUser();
   const { groupId, memberId } = await props.params;
   const group = getGroup(groupId);
-  if (!group || !isMember(groupId, user.id)) notFound();
+  if (!group) notFound();
 
   const members = getGroupMembers(groupId);
-  const other = members.find((m) => m.id === memberId);
-  if (!other) notFound();
+  const member = members.find((m) => m.id === memberId);
+  if (!member) notFound();
+  const nameOf = (id: string) => members.find((m) => m.id === id)?.name ?? "?";
 
-  const me = user.id;
-  const them = other.id;
-
-  // Positive delta = they owe you more after this row.
+  // Positive delta = the group owes them more after this row.
   const rows: {
     date: Date;
     label: string;
@@ -43,23 +38,16 @@ export default async function MemberPairPage(props: {
   for (const e of getGroupExpenses(groupId)) {
     const detail = getExpenseDetail(e.id);
     if (!detail) continue;
-    const pair = computePairwiseDebts(
-      [
-        {
-          payers: detail.payers.map((p) => ({ userId: p.userId, amountCents: p.amountCents })),
-          shares: detail.shares.map((s) => ({ userId: s.userId, amountCents: s.amountCents })),
-        },
-      ],
-      [],
-    );
-    const theyOweYou = pair.get(`${them}|${me}`) ?? 0;
-    const youOweThem = pair.get(`${me}|${them}`) ?? 0;
-    const delta = theyOweYou - youOweThem;
-    if (delta !== 0) {
+    const paid =
+      detail.payers.find((p) => p.userId === memberId)?.amountCents ?? 0;
+    const share =
+      detail.shares.find((s) => s.userId === memberId)?.amountCents ?? 0;
+    const delta = paid - share;
+    if (paid !== 0 || share !== 0) {
       rows.push({
         date: e.paidAt,
         label: e.description,
-        detail: `${formatCents(e.totalCents, e.currency)} · ${e.splitMethod}`,
+        detail: `paid ${formatCents(paid, e.currency)} · share ${formatCents(share, e.currency)}`,
         deltaCents: delta,
       });
     }
@@ -67,19 +55,19 @@ export default async function MemberPairPage(props: {
 
   for (const s of getGroupSettlements(groupId)) {
     if (s.status !== "confirmed") continue;
-    if (s.fromUser === them && s.toUser === me) {
+    if (s.fromUser === memberId) {
       rows.push({
         date: s.settledAt,
-        label: `${other.name} paid you back`,
-        detail: s.method ?? "settlement",
-        deltaCents: -s.amountCents,
-      });
-    } else if (s.fromUser === me && s.toUser === them) {
-      rows.push({
-        date: s.settledAt,
-        label: `You paid ${other.name} back`,
+        label: `Paid ${nameOf(s.toUser)} back`,
         detail: s.method ?? "settlement",
         deltaCents: s.amountCents,
+      });
+    } else if (s.toUser === memberId) {
+      rows.push({
+        date: s.settledAt,
+        label: `${nameOf(s.fromUser)} paid them back`,
+        detail: s.method ?? "settlement",
+        deltaCents: -s.amountCents,
       });
     }
   }
@@ -94,14 +82,7 @@ export default async function MemberPairPage(props: {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">
-        You ↔ {other.name}
-        {other.email === null && (
-          <span className="ml-2 align-middle rounded bg-zinc-100 px-1.5 py-0.5 text-xs font-normal text-zinc-500">
-            ghost
-          </span>
-        )}
-      </h1>
+      <h1 className="text-2xl font-bold">{member.name}&rsquo;s tab</h1>
       <p
         className={`rounded-lg border px-4 py-3 text-sm ${
           final > 0
@@ -113,19 +94,19 @@ export default async function MemberPairPage(props: {
       >
         {final > 0 && (
           <>
-            {other.name} owes you{" "}
+            The group owes {member.name}{" "}
             <strong>{formatCents(final, group.currency)}</strong> across{" "}
             {rows.length} entr{rows.length === 1 ? "y" : "ies"}
           </>
         )}
         {final < 0 && (
           <>
-            You owe {other.name}{" "}
+            {member.name} owes the group{" "}
             <strong>{formatCents(-final, group.currency)}</strong> across{" "}
             {rows.length} entr{rows.length === 1 ? "y" : "ies"}
           </>
         )}
-        {final === 0 && <>You and {other.name} are square.</>}
+        {final === 0 && <>{member.name} is all square.</>}
       </p>
 
       {withRunning.length > 0 && (

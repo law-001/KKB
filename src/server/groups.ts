@@ -2,11 +2,8 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, tables } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
-import { getGroupByInviteCode, isMember } from "@/lib/db/queries";
 import { SUPPORTED_CURRENCIES } from "@/lib/ledger/money";
 
 export interface FormState {
@@ -18,34 +15,62 @@ const createGroupSchema = z.object({
   currency: z.string().refine((c) => SUPPORTED_CURRENCIES.includes(c), {
     message: "Unsupported currency",
   }),
+  // Comma- or newline-separated member names; the app has no accounts, so
+  // members are just names.
+  members: z
+    .string()
+    .transform((raw) =>
+      raw
+        .split(/[,\n]/)
+        .map((n) => n.trim())
+        .filter((n) => n.length > 0),
+    )
+    .refine((names) => names.length >= 1, "Add at least one member")
+    .refine((names) => names.every((n) => n.length <= 80), "Name too long")
+    .refine(
+      (names) => new Set(names.map((n) => n.toLowerCase())).size === names.length,
+      "Duplicate member name",
+    ),
 });
 
 export async function createGroup(
   _prev: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const user = await requireUser();
   const parsed = createGroupSchema.safeParse({
     name: formData.get("name"),
     currency: formData.get("currency"),
+    members: formData.get("members") ?? "",
   });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
+  const { name, currency, members } = parsed.data;
 
   const groupId = db.transaction((tx) => {
+    const memberRows = tx
+      .insert(tables.users)
+      .values(members.map((n) => ({ name: n, email: null, passwordHash: null })))
+      .returning({ id: tables.users.id })
+      .all();
     const group = tx
       .insert(tables.groups)
-      .values({ ...parsed.data, createdBy: user.id })
+      .values({ name, currency, createdBy: memberRows[0].id })
       .returning({ id: tables.groups.id })
       .get();
     tx.insert(tables.groupMembers)
-      .values({ groupId: group.id, userId: user.id, role: "admin" })
+      .values(
+        memberRows.map((m, i) => ({
+          groupId: group.id,
+          userId: m.id,
+          role: i === 0 ? ("admin" as const) : ("member" as const),
+        })),
+      )
       .run();
     tx.insert(tables.activityLog)
       .values({
         groupId: group.id,
-        actorId: user.id,
+        actorId: memberRows[0].id,
         verb: "group.created",
-        payload: { groupName: parsed.data.name },
+        payload: { groupName: name, memberNames: members },
       })
       .run();
     return group.id;
@@ -54,71 +79,31 @@ export async function createGroup(
   redirect(`/groups/${groupId}`);
 }
 
-export async function joinGroup(code: string): Promise<void> {
-  const user = await requireUser();
-  const group = getGroupByInviteCode(code);
-  if (!group) redirect("/groups?error=invalid-invite");
+const memberNameSchema = z.string().trim().min(1, "Name is required").max(80);
 
-  db.transaction((tx) => {
-    // Duplicate joins are a no-op (upsert semantics).
-    const existing = tx
-      .select({ userId: tables.groupMembers.userId })
-      .from(tables.groupMembers)
-      .where(
-        and(
-          eq(tables.groupMembers.groupId, group.id),
-          eq(tables.groupMembers.userId, user.id),
-        ),
-      )
-      .get();
-    if (existing) return;
-    tx.insert(tables.groupMembers)
-      .values({ groupId: group.id, userId: user.id, role: "member" })
-      .run();
-    tx.insert(tables.activityLog)
-      .values({
-        groupId: group.id,
-        actorId: user.id,
-        verb: "member.joined",
-        payload: { memberName: user.name },
-      })
-      .run();
-  });
-
-  redirect(`/groups/${group.id}`);
-}
-
-const ghostSchema = z.string().trim().min(1, "Name is required").max(80);
-
-/**
- * Ghost members: split with friends who haven't signed up. A users row with
- * NULL email; appears in splits and balances like anyone else. The claim
- * flow (merging when they register) is deferred by design — see the plan.
- */
-export async function addGhostMember(
+/** Add a member by name — no account, no invite; the app is open. */
+export async function addMember(
   groupId: string,
   _prev: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const user = await requireUser();
-  if (!isMember(groupId, user.id)) return { error: "Not a member of this group" };
-  const parsed = ghostSchema.safeParse(formData.get("name"));
+  const parsed = memberNameSchema.safeParse(formData.get("name"));
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
   db.transaction((tx) => {
-    const ghost = tx
+    const member = tx
       .insert(tables.users)
       .values({ name: parsed.data, email: null, passwordHash: null })
       .returning({ id: tables.users.id })
       .get();
     tx.insert(tables.groupMembers)
-      .values({ groupId, userId: ghost.id, role: "member" })
+      .values({ groupId, userId: member.id, role: "member" })
       .run();
     tx.insert(tables.activityLog)
       .values({
         groupId,
-        actorId: user.id,
-        verb: "member.ghost_added",
+        actorId: member.id,
+        verb: "member.added",
         payload: { memberName: parsed.data },
       })
       .run();

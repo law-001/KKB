@@ -1,16 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
-import { getGroup, getGroupExpenses, getGroupMembers, isMember } from "@/lib/db/queries";
+import { getGroup, getGroupExpenses, getGroupMembers } from "@/lib/db/queries";
 import { formatCents } from "@/lib/ledger/money";
 
 export default async function ExpensesPage(props: {
   params: Promise<{ groupId: string }>;
 }) {
-  const user = await requireUser();
   const { groupId } = await props.params;
   const group = getGroup(groupId);
-  if (!group || !isMember(groupId, user.id)) notFound();
+  if (!group) notFound();
 
   const members = getGroupMembers(groupId);
   const expenses = getGroupExpenses(groupId);

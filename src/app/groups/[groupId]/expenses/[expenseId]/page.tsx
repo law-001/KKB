@@ -1,12 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
 import {
   getExpenseDetail,
   getExpenseHistory,
   getGroup,
   getGroupSettlements,
-  isMember,
 } from "@/lib/db/queries";
 import { formatCents } from "@/lib/ledger/money";
 import { DeleteExpenseButton } from "@/components/delete-expense-button";
@@ -14,10 +12,9 @@ import { DeleteExpenseButton } from "@/components/delete-expense-button";
 export default async function ExpenseDetailPage(props: {
   params: Promise<{ groupId: string; expenseId: string }>;
 }) {
-  const user = await requireUser();
   const { groupId, expenseId } = await props.params;
   const group = getGroup(groupId);
-  if (!group || !isMember(groupId, user.id)) notFound();
+  if (!group) notFound();
 
   const detail = getExpenseDetail(expenseId);
   if (!detail || detail.expense.groupId !== groupId) notFound();

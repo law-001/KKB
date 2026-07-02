@@ -3,17 +3,17 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, tables } from "@/lib/db";
 import { assertZeroSum } from "@/lib/ledger/balances";
 
-export function getUserGroups(userId: string) {
+/** The app is open: everyone sees every group. */
+export function getAllGroups() {
   return db
     .select({
       id: tables.groups.id,
       name: tables.groups.name,
       currency: tables.groups.currency,
-      inviteCode: tables.groups.inviteCode,
+      createdAt: tables.groups.createdAt,
     })
-    .from(tables.groupMembers)
-    .innerJoin(tables.groups, eq(tables.groups.id, tables.groupMembers.groupId))
-    .where(eq(tables.groupMembers.userId, userId))
+    .from(tables.groups)
+    .orderBy(desc(tables.groups.createdAt))
     .all();
 }
 
@@ -21,18 +21,10 @@ export function getGroup(groupId: string) {
   return db.select().from(tables.groups).where(eq(tables.groups.id, groupId)).get();
 }
 
-export function getGroupByInviteCode(code: string) {
-  return db
-    .select()
-    .from(tables.groups)
-    .where(eq(tables.groups.inviteCode, code))
-    .get();
-}
-
 export interface Member {
   id: string;
   name: string;
-  email: string | null; // null = ghost member (no account yet)
+  email: string | null; // legacy from the accounts era; always null now
   role: "admin" | "member";
 }
 

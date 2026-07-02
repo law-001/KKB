@@ -10,7 +10,11 @@ payer hands back.
 Built from `splitweird-plan.md`. Stack: **Next.js 16 (App Router) +
 TypeScript + Tailwind + Drizzle ORM + SQLite** (the plan's "simpler
 alternative" DB — zero setup, same relational architecture) with Server
-Actions instead of tRPC, Zod validation, and hand-rolled scrypt/session auth.
+Actions instead of tRPC and Zod validation.
+
+**The app is completely open — no accounts, no sign-in.** Members are just
+names; every group is visible to whoever opens the app. Built for a single
+friend group running it for themselves.
 
 ## Run it
 
@@ -21,9 +25,8 @@ npm run db:seed    # optional: demo group with every split method
 npm run dev        # http://localhost:3000
 ```
 
-After seeding, sign in as `alex@example.com` / `password123`
-(also `mia@` / `sam@`, same password) and open the **Friday Dinner Crew**
-group, or visit `/join/demo-invite`.
+After seeding, just open the app — no sign-in — and tap into the
+**Friday Dinner Crew** group.
 
 ```bash
 npm test           # ledger core: 33 table-driven + property-based tests
@@ -48,13 +51,15 @@ npm run build
 - `src/lib/db/` — Drizzle schema (append-only ledger: expenses supersede,
   never mutate; deletes are status flips) and queries, including the one
   UNION-ALL aggregate that *is* the balances feature
-- `src/server/` — Server Actions: auth, groups (invites + ghost members),
-  expenses (create / supersede-edit with conflict detection / delete),
-  settlements (pending → recipient confirms; ghosts auto-confirm)
+- `src/server/` — Server Actions: groups (created with member names;
+  add more anytime), expenses (create / supersede-edit with conflict
+  detection / delete), settlements (recorded immediately; the activity
+  feed is the audit trail)
 - `src/app/` — routes: group overview with live balances, expense form with
   client-side live preview (running the same `computeShares` as the server),
-  itemized receipt builder, settle-up screen with suggested plan and
-  one-tap recording, per-pair drill-down with running subtotal, activity feed
+  itemized receipt builder with the bayad/sukli calculator, settle-up screen
+  with suggested plan and one-tap recording, per-member tab with running
+  subtotal, activity feed
 
 ## Money-math rules (enforced, not aspirational)
 
@@ -67,5 +72,8 @@ npm run build
 
 ## Not built yet (per the plan's phasing)
 
-Ghost-claim merging, member removal guard, multi-currency, realtime,
-email digests, receipt OCR, unread badges, `balances_cache` exercise.
+Member removal guard, multi-currency, realtime, email digests, receipt
+OCR, unread badges, `balances_cache` exercise. Accounts/auth existed in
+an earlier version and were removed on purpose; the schema still has the
+(unused) `email` / `password_hash` / `sessions` columns if they ever
+come back.

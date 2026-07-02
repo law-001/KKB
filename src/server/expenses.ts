@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { db, tables, type DB } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
-import { getExpense, getGroup, getGroupMembers, isMember } from "@/lib/db/queries";
+import { getExpense, getGroup, getGroupMembers } from "@/lib/db/queries";
 import { computeShares, SplitError, type SplitInput } from "@/lib/ledger/split";
 import { expensePayloadSchema, type ExpensePayload } from "@/lib/expense-payload";
 
@@ -144,8 +143,6 @@ export async function createExpense(
   groupId: string,
   rawPayload: unknown,
 ): Promise<ExpenseResult> {
-  const user = await requireUser();
-  if (!isMember(groupId, user.id)) return { error: "Not a member of this group" };
   const group = getGroup(groupId);
   if (!group) return { error: "Group not found" };
 
@@ -154,11 +151,13 @@ export async function createExpense(
 
   try {
     const shares = prepare(groupId, parsed.data);
+    // No accounts: the first payer stands in as creator/actor.
+    const actorId = parsed.data.payers[0].userId;
     db.transaction((tx) => {
       const expenseId = insertExpenseRows(tx, {
         groupId,
         currency: group.currency,
-        createdBy: user.id,
+        createdBy: actorId,
         payload: parsed.data,
         shares,
       });
@@ -166,7 +165,7 @@ export async function createExpense(
       tx.insert(tables.activityLog)
         .values({
           groupId,
-          actorId: user.id,
+          actorId,
           verb: "expense.created",
           payload: {
             expenseId,
@@ -195,16 +194,15 @@ export async function updateExpense(
   expenseId: string,
   rawPayload: unknown,
 ): Promise<ExpenseResult> {
-  const user = await requireUser();
   const old = getExpense(expenseId);
   if (!old) return { error: "Expense not found" };
-  if (!isMember(old.groupId, user.id)) return { error: "Not a member of this group" };
 
   const parsed = expensePayloadSchema.safeParse(rawPayload);
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
   try {
     const shares = prepare(old.groupId, parsed.data);
+    const actorId = parsed.data.payers[0].userId;
     db.transaction((tx) => {
       const flipped = tx
         .update(tables.expenses)
@@ -222,7 +220,7 @@ export async function updateExpense(
       const newId = insertExpenseRows(tx, {
         groupId: old.groupId,
         currency: old.currency,
-        createdBy: user.id,
+        createdBy: actorId,
         payload: parsed.data,
         shares,
         supersedesId: expenseId,
@@ -230,7 +228,7 @@ export async function updateExpense(
       tx.insert(tables.activityLog)
         .values({
           groupId: old.groupId,
-          actorId: user.id,
+          actorId,
           verb: "expense.edited",
           payload: {
             expenseId: newId,
@@ -252,10 +250,8 @@ export async function updateExpense(
 
 /** Deleting = status flip + audit entry. The ledger keeps the history. */
 export async function deleteExpense(expenseId: string): Promise<ExpenseResult> {
-  const user = await requireUser();
   const old = getExpense(expenseId);
   if (!old) return { error: "Expense not found" };
-  if (!isMember(old.groupId, user.id)) return { error: "Not a member of this group" };
 
   const flipped = db.transaction((tx) => {
     const result = tx
@@ -269,7 +265,7 @@ export async function deleteExpense(expenseId: string): Promise<ExpenseResult> {
     tx.insert(tables.activityLog)
       .values({
         groupId: old.groupId,
-        actorId: user.id,
+        actorId: old.createdBy,
         verb: "expense.deleted",
         payload: { description: old.description, totalCents: old.totalCents },
       })

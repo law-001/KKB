@@ -1,35 +1,24 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
 import {
   getGroup,
   getGroupBalances,
   getGroupExpenses,
   getGroupMembers,
-  getGroupSettlements,
-  isMember,
 } from "@/lib/db/queries";
 import { formatCents } from "@/lib/ledger/money";
-import { GhostMemberForm } from "@/components/ghost-member-form";
-import { SettlementActions } from "@/components/settlement-actions";
+import { AddMemberForm } from "@/components/add-member-form";
 
 export default async function GroupPage(props: {
   params: Promise<{ groupId: string }>;
 }) {
-  const user = await requireUser();
   const { groupId } = await props.params;
   const group = getGroup(groupId);
-  if (!group || !isMember(groupId, user.id)) notFound();
+  if (!group) notFound();
 
   const members = getGroupMembers(groupId);
   const balances = getGroupBalances(groupId);
   const expenses = getGroupExpenses(groupId).slice(0, 5);
-  const pendingForMe = getGroupSettlements(groupId).filter(
-    (s) => s.status === "pending" && s.toUser === user.id,
-  );
-  const memberName = (id: string) =>
-    members.find((m) => m.id === id)?.name ?? "?";
-  const myBalance = balances.get(user.id) ?? 0;
 
   return (
     <div className="space-y-6">
@@ -57,53 +46,6 @@ export default async function GroupPage(props: {
         </div>
       </div>
 
-      <div
-        className={`rounded-lg border px-4 py-3 ${
-          myBalance > 0
-            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-            : myBalance < 0
-              ? "border-red-200 bg-red-50 text-red-800"
-              : "border-zinc-200 bg-white text-zinc-600"
-        }`}
-      >
-        {myBalance > 0 && (
-          <>
-            The group owes you{" "}
-            <strong>{formatCents(myBalance, group.currency)}</strong>
-          </>
-        )}
-        {myBalance < 0 && (
-          <>
-            You owe the group{" "}
-            <strong>{formatCents(-myBalance, group.currency)}</strong>
-          </>
-        )}
-        {myBalance === 0 && <>You&rsquo;re all settled up 🎉</>}
-      </div>
-
-      {pendingForMe.length > 0 && (
-        <section className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <h2 className="mb-2 text-sm font-semibold text-amber-800">
-            Waiting for your confirmation
-          </h2>
-          <ul className="space-y-2">
-            {pendingForMe.map((s) => (
-              <li
-                key={s.id}
-                className="flex flex-wrap items-center justify-between gap-2 text-sm"
-              >
-                <span>
-                  <strong>{memberName(s.fromUser)}</strong> says they paid you{" "}
-                  <strong>{formatCents(s.amountCents, group.currency)}</strong>
-                  {s.method ? ` via ${s.method}` : ""}
-                </span>
-                <SettlementActions settlementId={s.id} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
       <section>
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">
           Balances
@@ -117,22 +59,12 @@ export default async function GroupPage(props: {
                 key={m.id}
                 className="flex items-center justify-between px-4 py-2.5 text-sm"
               >
-                <span>
-                  <Link
-                    href={`/groups/${groupId}/members/${m.id}`}
-                    className="font-medium hover:underline"
-                  >
-                    {m.name}
-                  </Link>
-                  {m.email === null && (
-                    <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500">
-                      ghost
-                    </span>
-                  )}
-                  {m.id === user.id && (
-                    <span className="ml-2 text-xs text-zinc-400">(you)</span>
-                  )}
-                </span>
+                <Link
+                  href={`/groups/${groupId}/members/${m.id}`}
+                  className="font-medium hover:underline"
+                >
+                  {m.name}
+                </Link>
                 <span
                   className={
                     m.balance > 0
@@ -148,15 +80,13 @@ export default async function GroupPage(props: {
               </li>
             ))}
         </ul>
-        <div className="mt-3">
-          <GhostMemberForm groupId={groupId} />
-        </div>
-        <p className="mt-2 text-xs text-zinc-500">
-          Invite link:{" "}
-          <code className="rounded bg-zinc-100 px-1.5 py-0.5">
-            /join/{group.inviteCode}
-          </code>
+        <p className="mt-1.5 text-xs text-zinc-400">
+          + means the group owes them; − means they owe the group. Tap a name
+          for their full tab.
         </p>
+        <div className="mt-3">
+          <AddMemberForm groupId={groupId} />
+        </div>
       </section>
 
       <section>

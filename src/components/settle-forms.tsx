@@ -54,28 +54,24 @@ export function RecordTransferButton({
   );
 }
 
-/** Manual settlement: anyone ↔ anyone (one side must be you or a ghost). */
+/** Manual settlement: any member pays any other member. */
 export function ManualSettlementForm({
   groupId,
   currency,
   members,
-  currentUserId,
   overpayWarnings,
 }: {
   groupId: string;
   currency: string;
   members: MemberOption[];
-  currentUserId: string;
   /** debtor|creditor -> owed cents, to warn (not block) on overpayment */
   overpayWarnings: Record<string, number>;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [fromUser, setFromUser] = useState(currentUserId);
-  const [toUser, setToUser] = useState(
-    members.find((m) => m.id !== currentUserId)?.id ?? "",
-  );
+  const [fromUser, setFromUser] = useState(members[0]?.id ?? "");
+  const [toUser, setToUser] = useState(members[1]?.id ?? members[0]?.id ?? "");
   const [amountStr, setAmountStr] = useState("");
   const [method, setMethod] = useState("");
 
@@ -114,7 +110,6 @@ export function ManualSettlementForm({
           {members.map((m) => (
             <option key={m.id} value={m.id}>
               {m.name}
-              {m.isGhost ? " (ghost)" : ""}
             </option>
           ))}
         </select>
@@ -123,7 +118,6 @@ export function ManualSettlementForm({
           {members.map((m) => (
             <option key={m.id} value={m.id}>
               {m.name}
-              {m.isGhost ? " (ghost)" : ""}
             </option>
           ))}
         </select>
@@ -157,8 +151,8 @@ export function ManualSettlementForm({
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}
       <p className="text-xs text-zinc-400">
-        The recipient confirms before it counts (ghosts auto-confirm). Partial
-        amounts are fine.
+        Recorded immediately — partial amounts are fine, and everything shows
+        up in the activity feed.
       </p>
     </form>
   );
