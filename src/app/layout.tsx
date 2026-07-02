@@ -9,8 +9,9 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "SplitWeird",
-  description: "Bill splitting for the messy reality of group spending",
+  title: "KKB",
+  description:
+    "Kanya-kanyang bayad — bill splitting for the messy reality of group spending",
 };
 
 export default async function RootLayout({
@@ -26,7 +27,10 @@ export default async function RootLayout({
               href={user ? "/groups" : "/"}
               className="text-lg font-bold tracking-tight"
             >
-              Split<span className="text-emerald-600">Weird</span>
+              KK<span className="text-emerald-600">B</span>
+              <span className="ml-2 hidden text-xs font-normal text-zinc-400 sm:inline">
+                kanya-kanyang bayad
+              </span>
             </Link>
             {user ? (
               <div className="flex items-center gap-3 text-sm">

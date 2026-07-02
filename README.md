@@ -1,8 +1,11 @@
-# SplitWeird
+# KKB — kanya-kanyang bayad
 
 Bill splitting for the messy reality of group spending: uneven splits
 ("I only had a salad"), old debts ("you owe me from three dinners ago"),
-and running tabs between the same friends over time.
+running tabs between the same friends over time — and a built-in **sukli
+calculator**: on an itemized bill, type each person's cash under *Bayad*
+and it computes everyone's change, who's still *kulang*, and what the
+payer hands back.
 
 Built from `splitweird-plan.md`. Stack: **Next.js 16 (App Router) +
 TypeScript + Tailwind + Drizzle ORM + SQLite** (the plan's "simpler

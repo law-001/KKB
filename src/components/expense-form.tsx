@@ -36,11 +36,11 @@ interface OverheadRow {
 }
 
 const METHODS = [
+  { id: "itemized", label: "Itemized" },
   { id: "even", label: "Even" },
   { id: "exact", label: "Exact" },
   { id: "shares", label: "Shares" },
   { id: "percent", label: "Percent" },
-  { id: "itemized", label: "Itemized" },
   { id: "adjustment", label: "IOU" },
 ] as const;
 
@@ -106,7 +106,10 @@ export function ExpenseForm({
 
   // ── Split method state ─────────────────────────────────────────────────
   const initialSplit = initial?.split ?? null;
-  const [method, setMethod] = useState<Method>(initialSplit?.method ?? "even");
+  // Itemized is the default: the receipt is what's in front of you.
+  const [method, setMethod] = useState<Method>(
+    initialSplit?.method ?? "itemized",
+  );
 
   const [evenParticipants, setEvenParticipants] = useState<Set<string>>(
     () =>
@@ -145,6 +148,11 @@ export function ExpenseForm({
       ? initialSplit.owerId
       : (members.find((m) => m.id !== currentUserId)?.id ?? members[0]?.id ?? ""),
   );
+
+  // "Bayad" — cash each person hands over at the table. Purely a table-side
+  // calculator: sukli (change) = bayad − share. Never persisted, never
+  // touches the ledger.
+  const [bayad, setBayad] = useState<Record<string, string>>({});
 
   const allWeightsOn = () =>
     Object.fromEntries(members.map((m) => [m.id, 1]));
@@ -723,10 +731,106 @@ export function ExpenseForm({
       {/* Live preview — same computeShares the server runs */}
       <div className="rounded-lg border border-zinc-200 bg-white p-4">
         <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Preview
+          {method === "itemized" ? "Preview & sukli calculator" : "Preview"}
         </h3>
         {"error" in preview ? (
           <p className="text-sm text-amber-600">{preview.error}</p>
+        ) : method === "itemized" ? (
+          <div className="space-y-1">
+            <div className="grid grid-cols-[1fr_5rem_6rem_6rem] items-center gap-2 text-xs font-medium uppercase tracking-wide text-zinc-400">
+              <span />
+              <span className="text-right">Share</span>
+              <span className="text-right">Bayad</span>
+              <span className="text-right">Sukli</span>
+            </div>
+            {[...preview.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([uid, cents]) => {
+                const raw = (bayad[uid] ?? "").trim();
+                const paid = raw === "" ? null : parseAmountToCents(raw, currency);
+                const sukli = paid === null ? null : paid - cents;
+                return (
+                  <div
+                    key={uid}
+                    className="grid grid-cols-[1fr_5rem_6rem_6rem] items-center gap-2 text-sm"
+                  >
+                    <span className="truncate">{nameOf(uid)}</span>
+                    <span className="text-right font-medium">
+                      {formatCents(cents, currency)}
+                    </span>
+                    <input
+                      value={bayad[uid] ?? ""}
+                      onChange={(e) => setBayad({ ...bayad, [uid]: e.target.value })}
+                      inputMode="decimal"
+                      placeholder="cash"
+                      className={`${inputClass} w-full text-right`}
+                    />
+                    <span className="text-right">
+                      {raw === "" ? (
+                        <span className="text-zinc-300">—</span>
+                      ) : sukli === null ? (
+                        <span className="text-red-600">?</span>
+                      ) : sukli >= 0 ? (
+                        <span className="font-medium text-emerald-600">
+                          {formatCents(sukli, currency)}
+                        </span>
+                      ) : (
+                        <span className="font-medium text-red-600">
+                          kulang {formatCents(-sukli, currency)}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            {(() => {
+              const rows = [...preview.entries()].map(([uid, cents]) => {
+                const raw = (bayad[uid] ?? "").trim();
+                const paid = raw === "" ? null : parseAmountToCents(raw, currency);
+                return { cents, paid };
+              });
+              const entered = rows.filter((r) => r.paid !== null);
+              if (entered.length === 0) {
+                return (
+                  <p className="border-t border-zinc-100 pt-2 text-xs text-zinc-400">
+                    Type each person&rsquo;s cash under <strong>Bayad</strong>{" "}
+                    to get their sukli. This is just a table-side calculator —
+                    it doesn&rsquo;t change what gets recorded.
+                  </p>
+                );
+              }
+              const collected = entered.reduce((s, r) => s + (r.paid ?? 0), 0);
+              const changeBack = entered.reduce(
+                (s, r) => s + Math.max(0, (r.paid ?? 0) - r.cents),
+                0,
+              );
+              const short = entered.reduce(
+                (s, r) => s + Math.max(0, r.cents - (r.paid ?? 0)),
+                0,
+              );
+              return (
+                <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 border-t border-zinc-100 pt-2 text-xs text-zinc-500">
+                  <span>
+                    Collected: <strong>{formatCents(collected, currency)}</strong>
+                  </span>
+                  <span>
+                    Sukli to hand back:{" "}
+                    <strong className="text-emerald-600">
+                      {formatCents(changeBack, currency)}
+                    </strong>
+                  </span>
+                  {short > 0 && (
+                    <span>
+                      Still kulang:{" "}
+                      <strong className="text-red-600">
+                        {formatCents(short, currency)}
+                      </strong>
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
         ) : (
           <ul className="space-y-1 text-sm">
             {[...preview.entries()]
