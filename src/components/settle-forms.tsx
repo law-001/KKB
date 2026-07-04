@@ -5,9 +5,7 @@ import { useRouter } from "next/navigation";
 import { createSettlement } from "@/server/settlements";
 import { formatCents, parseAmountToCents } from "@/lib/ledger/money";
 import type { MemberOption } from "@/components/expense-form";
-
-const inputClass =
-  "rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm focus:border-emerald-500 focus:outline-none";
+import { IconCheck, Select } from "@/components/ui";
 
 /** One-tap "record this payment" for a suggested transfer. */
 export function RecordTransferButton({
@@ -26,7 +24,13 @@ export function RecordTransferButton({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  if (done) return <span className="text-xs text-emerald-600">Recorded ✓</span>;
+  if (done)
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-pos">
+        <IconCheck className="size-3.5" />
+        Recorded
+      </span>
+    );
   return (
     <span className="flex items-center gap-2">
       <button
@@ -45,11 +49,15 @@ export function RecordTransferButton({
             }
           })
         }
-        className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+        className="btn btn-stamp min-h-9 px-3 text-xs"
       >
-        Record this payment
+        {pending ? "Recording…" : "Record this payment"}
       </button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && (
+        <span role="alert" className="text-xs text-neg">
+          {error}
+        </span>
+      )}
     </span>
   );
 }
@@ -77,8 +85,7 @@ export function ManualSettlementForm({
 
   const amountCents = parseAmountToCents(amountStr, currency);
   const owed = overpayWarnings[`${fromUser}|${toUser}`] ?? 0;
-  const overpaying =
-    amountCents !== null && owed >= 0 && amountCents > owed;
+  const overpaying = amountCents !== null && owed >= 0 && amountCents > owed;
 
   return (
     <form
@@ -105,53 +112,71 @@ export function ManualSettlementForm({
         });
       }}
     >
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <select value={fromUser} onChange={(e) => setFromUser(e.target.value)} className={inputClass}>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-        <span className="text-zinc-500">paid</span>
-        <select value={toUser} onChange={(e) => setToUser(e.target.value)} className={inputClass}>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-        <input
-          value={amountStr}
-          onChange={(e) => setAmountStr(e.target.value)}
-          inputMode="decimal"
-          placeholder={`amount (${currency})`}
-          className={`${inputClass} w-32`}
-        />
-        <input
-          value={method}
-          onChange={(e) => setMethod(e.target.value)}
-          placeholder="GCash, cash… (optional)"
-          maxLength={40}
-          className={`${inputClass} w-40`}
-        />
+      <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
+        <label className="block min-w-0 text-sm">
+          <span className="microlabel mb-1 block">From</span>
+          <Select value={fromUser} onChange={(e) => setFromUser(e.target.value)}>
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <span className="pb-2.5 text-sm text-ink-faint">paid</span>
+        <label className="block min-w-0 text-sm">
+          <span className="microlabel mb-1 block">To</span>
+          <Select value={toUser} onChange={(e) => setToUser(e.target.value)}>
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </Select>
+        </label>
+      </div>
+      <div className="grid grid-cols-[1fr_1fr] gap-2 sm:grid-cols-[10rem_1fr_auto]">
+        <label className="block min-w-0 text-sm">
+          <span className="microlabel mb-1 block">Amount · {currency}</span>
+          <input
+            value={amountStr}
+            onChange={(e) => setAmountStr(e.target.value)}
+            inputMode="decimal"
+            placeholder="0.00"
+            className="field font-mono tabular-nums"
+          />
+        </label>
+        <label className="block min-w-0 text-sm">
+          <span className="microlabel mb-1 block">Method · optional</span>
+          <input
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            placeholder="GCash, cash…"
+            maxLength={40}
+            className="field"
+          />
+        </label>
         <button
           disabled={pending}
-          className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          className="btn btn-primary col-span-2 min-h-11 px-5 text-sm sm:col-span-1"
         >
-          Record
+          {pending ? "Recording…" : "Record"}
         </button>
       </div>
       {overpaying && (
-        <p className="text-xs text-amber-600">
-          Heads up: that&rsquo;s more than the{" "}
-          {formatCents(owed, currency)} currently owed on this pair — the
-          balance will flip the other way. That&rsquo;s allowed.
+        <p className="rounded-lg bg-accent-soft px-3 py-2 text-xs leading-relaxed text-warn">
+          Heads up: that&rsquo;s more than the {formatCents(owed, currency)}{" "}
+          currently owed on this pair, so the balance will flip the other way.
+          That&rsquo;s allowed.
         </p>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <p className="text-xs text-zinc-400">
-        Recorded immediately — partial amounts are fine, and everything shows
+      {error && (
+        <p role="alert" className="text-sm text-neg">
+          {error}
+        </p>
+      )}
+      <p className="text-xs text-ink-faint">
+        Recorded immediately. Partial amounts are fine, and everything shows
         up in the activity feed.
       </p>
     </form>

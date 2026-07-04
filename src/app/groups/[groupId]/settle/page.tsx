@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   getGroup,
@@ -7,59 +6,75 @@ import {
   getGroupSettlements,
   getLedgerForPairwise,
 } from "@/lib/db/queries";
+import { requireGroupMember } from "@/lib/auth";
 import { simplifyDebts } from "@/lib/ledger/simplify";
 import { computePairwiseDebts } from "@/lib/ledger/balances";
-import { formatCents } from "@/lib/ledger/money";
 import {
   ManualSettlementForm,
   RecordTransferButton,
 } from "@/components/settle-forms";
+import {
+  Amount,
+  BackLink,
+  Dots,
+  IconArrowRight,
+  IconCheck,
+  PageHeader,
+} from "@/components/ui";
 
 export default async function SettlePage(props: {
   params: Promise<{ groupId: string }>;
 }) {
   const { groupId } = await props.params;
-  const group = getGroup(groupId);
+  await requireGroupMember(groupId);
+  const [group, members, balances, ledger, allSettlements] = await Promise.all([
+    getGroup(groupId),
+    getGroupMembers(groupId),
+    getGroupBalances(groupId),
+    getLedgerForPairwise(groupId),
+    getGroupSettlements(groupId),
+  ]);
   if (!group) notFound();
 
-  const members = getGroupMembers(groupId);
-  const balances = getGroupBalances(groupId);
   const plan = simplifyDebts(balances);
-  const ledger = getLedgerForPairwise(groupId);
   const pairwise = computePairwiseDebts(ledger.expenses, ledger.settlements);
-  const settlements = getGroupSettlements(groupId).slice(0, 10);
+  const settlements = allSettlements.slice(0, 10);
   const nameOf = (id: string) => members.find((m) => m.id === id)?.name ?? "?";
 
   const memberOptions = members.map((m) => ({ id: m.id, name: m.name }));
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Settle up — {group.name}</h1>
+    <div className="mx-auto max-w-2xl space-y-8">
+      <div className="rise">
+        <PageHeader eyebrow={group.name} title="Settle up" />
+      </div>
 
-      <section className="rounded-lg border border-zinc-200 bg-white p-4">
-        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Suggested plan (fewest transfers)
-        </h2>
-        <p className="mb-3 text-xs text-zinc-400">
-          A suggestion, not an obligation — record whatever actually happens.
+      <section className="rise rise-1">
+        <h2 className="microlabel mb-1">Suggested plan · fewest transfers</h2>
+        <p className="mb-3 text-sm text-ink-faint">
+          A suggestion, not an obligation. Record whatever actually happens.
         </p>
         {plan.length === 0 ? (
-          <p className="text-sm text-emerald-600">
-            Everyone is at zero. Nothing to settle 🎉
+          <p className="flex items-center gap-2 rounded-xl bg-pos-soft px-4 py-3 text-sm font-medium text-pos">
+            <IconCheck className="size-4" />
+            Everyone is at zero. Nothing to settle.
           </p>
         ) : (
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-soft overflow-hidden rounded-xl border border-line bg-cream">
             {plan.map((t, i) => (
               <li
                 key={i}
-                className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 text-sm"
               >
-                <span>
-                  <strong>{nameOf(t.from)}</strong> pays{" "}
-                  <strong>{nameOf(t.to)}</strong>{" "}
-                  <span className="font-medium text-emerald-700">
-                    {formatCents(t.amountCents, group.currency)}
-                  </span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate font-medium">{nameOf(t.from)}</span>
+                  <IconArrowRight className="size-3.5 shrink-0 text-ink-faint" />
+                  <span className="truncate font-medium">{nameOf(t.to)}</span>
+                  <Amount
+                    cents={t.amountCents}
+                    currency={group.currency}
+                    className="ml-1 font-medium text-accent-deep"
+                  />
                 </span>
                 <RecordTransferButton
                   groupId={groupId}
@@ -73,10 +88,8 @@ export default async function SettlePage(props: {
         )}
       </section>
 
-      <section className="rounded-lg border border-zinc-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Record a payment manually
-        </h2>
+      <section className="rise rise-2 card p-4 sm:p-5">
+        <h2 className="microlabel mb-3">Record a payment manually</h2>
         <ManualSettlementForm
           groupId={groupId}
           currency={group.currency}
@@ -86,13 +99,12 @@ export default async function SettlePage(props: {
       </section>
 
       {pairwise.size > 0 && (
-        <section className="rounded-lg border border-zinc-200 bg-white p-4">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Who owes whom, exactly
-          </h2>
-          <p className="mb-3 text-xs text-zinc-400">
-            Pairwise view from actual shared expenses — &ldquo;you owe{" "}
-            <em>me</em> from three dinners ago&rdquo;, preserved literally.
+        <section className="rise rise-3">
+          <h2 className="microlabel mb-1">Who owes whom, exactly</h2>
+          <p className="mb-3 text-sm text-ink-faint">
+            Pairwise view from actual shared expenses: &ldquo;you owe{" "}
+            <em>me</em>
+            {" from three dinners ago"}&rdquo;, preserved literally.
           </p>
           <ul className="space-y-1 text-sm">
             {[...pairwise.entries()]
@@ -100,13 +112,18 @@ export default async function SettlePage(props: {
               .map(([key, cents]) => {
                 const [from, to] = key.split("|");
                 return (
-                  <li key={key} className="flex justify-between">
-                    <span>
-                      {nameOf(from)} → {nameOf(to)}
+                  <li key={key} className="flex items-baseline">
+                    <span className="flex min-w-0 items-center gap-1.5 py-1">
+                      <span className="truncate">{nameOf(from)}</span>
+                      <IconArrowRight className="size-3 shrink-0 text-ink-faint" />
+                      <span className="truncate">{nameOf(to)}</span>
                     </span>
-                    <span className="font-medium">
-                      {formatCents(cents, group.currency)}
-                    </span>
+                    <Dots />
+                    <Amount
+                      cents={cents}
+                      currency={group.currency}
+                      className="py-1 font-medium"
+                    />
                   </li>
                 );
               })}
@@ -115,26 +132,33 @@ export default async function SettlePage(props: {
       )}
 
       {settlements.length > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Recent settlements
-          </h2>
-          <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white text-sm">
+        <section className="rise rise-4">
+          <h2 className="microlabel mb-3">Recent settlements</h2>
+          <ul className="divide-y divide-line-soft overflow-hidden rounded-xl border border-line bg-cream text-sm">
             {settlements.map((s) => (
-              <li key={s.id} className="flex justify-between px-4 py-2.5">
-                <span>
-                  {nameOf(s.fromUser)} → {nameOf(s.toUser)}
-                  {s.method ? ` (${s.method})` : ""}
+              <li
+                key={s.id}
+                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3"
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate">{nameOf(s.fromUser)}</span>
+                  <IconArrowRight className="size-3 shrink-0 text-ink-faint" />
+                  <span className="truncate">{nameOf(s.toUser)}</span>
+                  {s.method && (
+                    <span className="microlabel normal-case tracking-normal">
+                      via {s.method}
+                    </span>
+                  )}
                 </span>
-                <span className="flex items-center gap-2">
-                  {formatCents(s.amountCents, group.currency)}
+                <span className="flex shrink-0 items-center gap-2">
+                  <Amount cents={s.amountCents} currency={group.currency} />
                   <span
-                    className={`rounded px-1.5 py-0.5 text-xs ${
+                    className={`microlabel rounded-full px-2 py-0.5 ${
                       s.status === "confirmed"
-                        ? "bg-emerald-100 text-emerald-700"
+                        ? "bg-pos-soft text-pos"
                         : s.status === "pending"
-                          ? "bg-amber-100 text-amber-700"
-                          : "bg-zinc-100 text-zinc-500 line-through"
+                          ? "bg-accent-soft text-warn"
+                          : "bg-paper text-ink-faint line-through"
                     }`}
                   >
                     {s.status}
@@ -146,12 +170,7 @@ export default async function SettlePage(props: {
         </section>
       )}
 
-      <Link
-        href={`/groups/${groupId}`}
-        className="inline-block text-sm text-emerald-600 hover:underline"
-      >
-        ← Back to group
-      </Link>
+      <BackLink href={`/groups/${groupId}`}>Back to group</BackLink>
     </div>
   );
 }

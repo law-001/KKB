@@ -9,6 +9,7 @@ import {
 } from "@/lib/ledger/split";
 import { formatCents, parseAmountToCents } from "@/lib/ledger/money";
 import type { ExpensePayload } from "@/lib/expense-payload";
+import { IconCheck, IconMinus, IconPlus, IconX, Select } from "@/components/ui";
 
 export interface MemberOption {
   id: string;
@@ -22,7 +23,9 @@ interface PayerRow {
 
 interface ItemRow {
   label: string;
+  /** Price of a single unit; multiplied by qty for the line total. */
   amountStr: string;
+  qty: number;
   /** userId -> weight (0 = not consuming) */
   weights: Record<string, number>;
 }
@@ -45,15 +48,26 @@ const METHODS = [
 
 type Method = (typeof METHODS)[number]["id"];
 
-const inputClass =
-  "rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm focus:border-emerald-500 focus:outline-none";
-
 /** Percent string ("33.33") -> integer basis points (3333), or null. */
 function parsePercentToBp(raw: string): number | null {
   const cleaned = raw.trim();
   if (!/^\d+(\.\d{0,2})?$/.test(cleaned)) return null;
   const [whole, frac = ""] = cleaned.split(".");
   return parseInt(whole, 10) * 100 + (frac ? parseInt(frac.padEnd(2, "0"), 10) : 0);
+}
+
+/** Small icon-only remove button, 44px hit area via padding. */
+function RemoveButton({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="-m-1 shrink-0 rounded-lg p-2 text-ink-faint transition-colors hover:bg-neg-soft hover:text-neg"
+    >
+      <IconX className="size-4" />
+    </button>
+  );
 }
 
 export function ExpenseForm({
@@ -102,6 +116,23 @@ export function ExpenseForm({
       amountStr: toAmountStr(p.amountCents),
     })) ?? [{ userId: defaultPayerId, amountStr: "" }],
   );
+  // Off = true KKB: nobody fronted the bill, everyone paid their own share.
+  // Default off — most of the time no single friend covers the whole table.
+  const [someonePaid, setSomeonePaid] = useState<boolean>(() => {
+    if (!initial) return false;
+    if (!initial.split) return true;
+    try {
+      // An expense saved in KKB mode has payers identical to its shares.
+      const shares = computeShares(initial.totalCents, initial.split);
+      const nonZero = [...shares.values()].filter((c) => c > 0).length;
+      const paidOwn =
+        initial.payers.length === nonZero &&
+        initial.payers.every((p) => shares.get(p.userId) === p.amountCents);
+      return !paidOwn;
+    } catch {
+      return true;
+    }
+  });
 
   // ── Split method state ─────────────────────────────────────────────────
   const initialSplit = initial?.split ?? null;
@@ -148,9 +179,9 @@ export function ExpenseForm({
       : (members.find((m) => m.id !== defaultPayerId)?.id ?? members[0]?.id ?? ""),
   );
 
-  // "Bayad" — cash each person hands over at the table. Purely a table-side
-  // calculator: sukli (change) = bayad − share. Never persisted, never
-  // touches the ledger.
+  // "Bayad" — cash each person hands over at the table. Sukli = bayad − share.
+  // On create it's recorded as expense-linked settlements to the payer (or,
+  // in KKB mode, to whoever holds the cash pile).
   const [bayad, setBayad] = useState<Record<string, string>>({});
 
   const allWeightsOn = () =>
@@ -159,13 +190,16 @@ export function ExpenseForm({
     initialSplit?.method === "itemized"
       ? initialSplit.items.map((i) => ({
           label: i.label,
+          // Existing expenses only ever stored a line total, so it loads
+          // back as qty 1 — mathematically identical to "price each".
           amountStr: toAmountStr(i.amountCents),
+          qty: 1,
           weights: {
             ...Object.fromEntries(members.map((m) => [m.id, 0])),
-            ...Object.fromEntries(i.consumers.map((c) => [c.userId, c.weight])),
+            ...Object.fromEntries(i.consumers.map((c) => [c.userId, c.weight > 0 ? 1 : 0])),
           },
         }))
-      : [{ label: "", amountStr: "", weights: allWeightsOn() }],
+      : [{ label: "", amountStr: "", qty: 1, weights: allWeightsOn() }],
   );
   const [overheads, setOverheads] = useState<OverheadRow[]>(() =>
     initialSplit?.method === "itemized"
@@ -179,7 +213,11 @@ export function ExpenseForm({
   );
 
   // ── Derived: totals, split input, live preview ────────────────────────
-  const itemizedItemCents = items.map((i) => parseAmountToCents(i.amountStr, currency));
+  // amountStr is the price of one unit; the line total is unit × qty.
+  const itemizedItemCents = items.map((i) => {
+    const unit = parseAmountToCents(i.amountStr, currency);
+    return unit === null ? null : unit * i.qty;
+  });
   const itemizedOverheadCents = overheads.map((o) => {
     const v = parseAmountToCents(o.amountStr, currency);
     if (v === null) return null;
@@ -298,10 +336,19 @@ export function ExpenseForm({
     }
   }, [split, totalCents, method]);
 
+  // IOU means someone is owed by definition, so KKB mode doesn't apply there.
+  const kkbMode = !someonePaid && method !== "adjustment";
+
   // Payer validation: single payer auto-covers the total.
   const payerAmounts: { userId: string; amountCents: number }[] | { error: string } =
     useMemo(() => {
       if (totalCents === null || totalCents <= 0) return { error: "No total yet" };
+      if (kkbMode) {
+        // KKB: whoever holds the cash pile pays the restaurant. Bayad entered
+        // becomes recorded payments to them; an empty bayad means unpaid — a
+        // real debt to the cash holder until ticked off on the expense page.
+        return [{ userId: payers[0].userId, amountCents: totalCents }];
+      }
       if (payers.length === 1) {
         return [{ userId: payers[0].userId, amountCents: totalCents }];
       }
@@ -319,7 +366,7 @@ export function ExpenseForm({
           error: `Payers cover ${formatCents(sum, currency)} of ${formatCents(totalCents, currency)}`,
         };
       return parsed;
-    }, [payers, totalCents, currency]);
+    }, [payers, totalCents, currency, kkbMode]);
 
   const formError =
     ("error" in preview ? preview.error : null) ??
@@ -330,12 +377,27 @@ export function ExpenseForm({
 
   const submit = () => {
     if ("error" in split || totalCents === null || !Array.isArray(payerAmounts)) return;
+    // Bayad typed into the sukli calculator becomes real recorded payments
+    // to the payer (or cash holder in KKB mode) — create only, edits would
+    // double-record what's already on the ledger.
+    const payerIds = new Set(payerAmounts.map((p) => p.userId));
+    const payments =
+      !initial
+        ? Object.entries(bayad)
+            .map(([userId, str]) => ({
+              userId,
+              amountCents:
+                str.trim() === "" ? 0 : (parseAmountToCents(str, currency) ?? 0),
+            }))
+            .filter((p) => p.amountCents > 0 && !payerIds.has(p.userId))
+        : [];
     const payload: ExpensePayload = {
       description: description.trim(),
       totalCents,
       paidAt,
       notes: notes.trim() || undefined,
       payers: payerAmounts,
+      payments: payments.length > 0 ? payments : undefined,
       split,
     };
     startTransition(async () => {
@@ -351,525 +413,698 @@ export function ExpenseForm({
 
   const nameOf = (id: string) => members.find((m) => m.id === id)?.name ?? "?";
 
+  /**
+   * A payer who also ate must appear in the split. Idempotent: if they're
+   * already anywhere in the split this is a no-op, and un-tapping them
+   * afterwards still works. Exact/percent are left alone — we can't guess
+   * amounts for them.
+   */
+  const includeInSplit = (userId: string) => {
+    if (!userId) return;
+    setEvenParticipants((prev) =>
+      prev.has(userId) ? prev : new Set(prev).add(userId),
+    );
+    setItems((prev) =>
+      prev.some((r) => (r.weights[userId] ?? 0) > 0)
+        ? prev
+        : prev.map((r) => ({ ...r, weights: { ...r.weights, [userId]: 1 } })),
+    );
+    setShareCounts((prev) => {
+      const n = parseInt(prev[userId] || "0", 10);
+      return Number.isInteger(n) && n > 0 ? prev : { ...prev, [userId]: "1" };
+    });
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-5">
-      {/* Basics */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="text-sm sm:col-span-2">
-          <span className="mb-1 block font-medium">Description</span>
-          <input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            maxLength={140}
-            placeholder="Dinner at Manam"
-            className={`${inputClass} w-full`}
-          />
-        </label>
-        {method !== "itemized" ? (
-          <label className="text-sm">
-            <span className="mb-1 block font-medium">Total ({currency})</span>
+    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_21rem] lg:items-start lg:gap-x-10 lg:gap-y-6">
+      <div className="space-y-6">
+        {/* Basics */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="text-sm sm:col-span-2">
+            <span className="mb-1 block font-medium">Description</span>
             <input
-              value={totalStr}
-              onChange={(e) => setTotalStr(e.target.value)}
-              inputMode="decimal"
-              placeholder="1200.00"
-              className={`${inputClass} w-full`}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={140}
+              placeholder="Dinner at Manam"
+              className="field"
             />
           </label>
-        ) : (
-          <div className="text-sm">
-            <span className="mb-1 block font-medium">Total ({currency})</span>
-            <div className="rounded-md border border-dashed border-zinc-300 px-2.5 py-1.5 text-zinc-600">
-              {itemizedTotal !== null ? formatCents(itemizedTotal, currency) : "—"}
-              <span className="ml-1 text-xs text-zinc-400">(from receipt)</span>
-            </div>
-          </div>
-        )}
-        <label className="text-sm">
-          <span className="mb-1 block font-medium">
-            Date paid <span className="font-normal text-zinc-400">(backdate freely)</span>
-          </span>
-          <input
-            type="date"
-            value={paidAt}
-            onChange={(e) => setPaidAt(e.target.value)}
-            className={`${inputClass} w-full`}
-          />
-        </label>
-      </div>
-
-      {/* Payers */}
-      <fieldset className="rounded-lg border border-zinc-200 bg-white p-4">
-        <legend className="px-1 text-sm font-medium">Who paid?</legend>
-        <div className="space-y-2">
-          {payers.map((p, idx) => (
-            <div key={idx} className="flex items-center gap-2">
-              <select
-                value={p.userId}
-                onChange={(e) =>
-                  setPayers(payers.map((row, i) => (i === idx ? { ...row, userId: e.target.value } : row)))
-                }
-                className={inputClass}
-              >
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-              {payers.length > 1 && (
-                <input
-                  value={p.amountStr}
-                  onChange={(e) =>
-                    setPayers(payers.map((row, i) => (i === idx ? { ...row, amountStr: e.target.value } : row)))
-                  }
-                  inputMode="decimal"
-                  placeholder="amount"
-                  className={`${inputClass} w-28`}
-                />
-              )}
-              {payers.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => setPayers(payers.filter((_, i) => i !== idx))}
-                  className="text-sm text-zinc-400 hover:text-red-600"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-          ))}
-          <button
-            type="button"
-            onClick={() => setPayers([...payers, { userId: members[0]?.id ?? "", amountStr: "" }])}
-            className="text-sm text-emerald-600 hover:underline"
-          >
-            + Split the payment across another card/person
-          </button>
-          <p className="text-xs text-zinc-400">
-            The payer doesn&rsquo;t have to be part of the split — &ldquo;I paid but didn&rsquo;t eat&rdquo; works.
-          </p>
-        </div>
-      </fieldset>
-
-      {/* Method picker */}
-      <div className="flex flex-wrap gap-1 rounded-lg bg-zinc-100 p-1">
-        {METHODS.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => setMethod(m.id)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              method === m.id ? "bg-white shadow-sm" : "text-zinc-500 hover:text-zinc-800"
-            }`}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Method sub-forms */}
-      <div className="rounded-lg border border-zinc-200 bg-white p-4">
-        {method === "even" && (
-          <div className="space-y-2">
-            <p className="text-sm text-zinc-500">Split evenly between:</p>
-            <div className="flex flex-wrap gap-2">
-              {members.map((m) => {
-                const on = evenParticipants.has(m.id);
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => {
-                      const next = new Set(evenParticipants);
-                      if (on) next.delete(m.id);
-                      else next.add(m.id);
-                      setEvenParticipants(next);
-                    }}
-                    className={`rounded-full border px-3 py-1 text-sm ${
-                      on
-                        ? "border-emerald-600 bg-emerald-50 text-emerald-700"
-                        : "border-zinc-300 text-zinc-400"
-                    }`}
-                  >
-                    {m.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {method === "exact" && (
-          <div className="space-y-2">
-            <p className="text-sm text-zinc-500">
-              Exact amounts (leave blank to exclude). Must add up to the total.
-            </p>
-            {members.map((m) => (
-              <label key={m.id} className="flex items-center gap-2 text-sm">
-                <span className="w-32 truncate">{m.name}</span>
-                <input
-                  value={exactAmounts[m.id] ?? ""}
-                  onChange={(e) => setExactAmounts({ ...exactAmounts, [m.id]: e.target.value })}
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  className={`${inputClass} w-28`}
-                />
-              </label>
-            ))}
-          </div>
-        )}
-
-        {method === "shares" && (
-          <div className="space-y-2">
-            <p className="text-sm text-zinc-500">
-              Weights — e.g. 2 for the couple, 1 for each single. 0 excludes.
-            </p>
-            {members.map((m) => (
-              <label key={m.id} className="flex items-center gap-2 text-sm">
-                <span className="w-32 truncate">{m.name}</span>
-                <input
-                  value={shareCounts[m.id] ?? ""}
-                  onChange={(e) => setShareCounts({ ...shareCounts, [m.id]: e.target.value })}
-                  inputMode="numeric"
-                  className={`${inputClass} w-20`}
-                />
-              </label>
-            ))}
-          </div>
-        )}
-
-        {method === "percent" && (
-          <div className="space-y-2">
-            <p className="text-sm text-zinc-500">
-              Percentages (up to 2 decimals). Must total exactly 100%.
-            </p>
-            {members.map((m) => (
-              <label key={m.id} className="flex items-center gap-2 text-sm">
-                <span className="w-32 truncate">{m.name}</span>
-                <input
-                  value={percents[m.id] ?? ""}
-                  onChange={(e) => setPercents({ ...percents, [m.id]: e.target.value })}
-                  inputMode="decimal"
-                  placeholder="33.33"
-                  className={`${inputClass} w-24`}
-                />
-                <span className="text-zinc-400">%</span>
-              </label>
-            ))}
-          </div>
-        )}
-
-        {method === "adjustment" && (
-          <div className="space-y-2 text-sm">
-            <p className="text-zinc-500">
-              Quick IOU — the whole amount is owed by one person to the payer.
-              (&ldquo;You spotted me ₱200 at the arcade.&rdquo;)
-            </p>
-            <label className="flex items-center gap-2">
-              <span>Who owes:</span>
-              <select value={owerId} onChange={(e) => setOwerId(e.target.value)} className={inputClass}>
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
+          {method !== "itemized" ? (
+            <label className="text-sm">
+              <span className="mb-1 block font-medium">
+                Total <span className="microlabel">{currency}</span>
+              </span>
+              <input
+                value={totalStr}
+                onChange={(e) => setTotalStr(e.target.value)}
+                inputMode="decimal"
+                placeholder="1200.00"
+                className="field font-mono tabular-nums"
+              />
             </label>
-          </div>
-        )}
-
-        {method === "itemized" && (
-          <div className="space-y-4">
-            <p className="text-sm text-zinc-500">
-              Enter the receipt line by line. Tap names to toggle who had each
-              item; tap again for double weight (&times;2, &times;3) when
-              someone ate more of a shared dish.
-            </p>
-            <div className="space-y-3">
-              {items.map((item, idx) => (
-                <div key={idx} className="rounded-md border border-zinc-200 p-3">
-                  <div className="flex items-center gap-2">
-                    <input
-                      value={item.label}
-                      onChange={(e) =>
-                        setItems(items.map((r, i) => (i === idx ? { ...r, label: e.target.value } : r)))
-                      }
-                      placeholder={`Item ${idx + 1} — e.g. Caesar salad`}
-                      className={`${inputClass} flex-1`}
-                    />
-                    <input
-                      value={item.amountStr}
-                      onChange={(e) =>
-                        setItems(items.map((r, i) => (i === idx ? { ...r, amountStr: e.target.value } : r)))
-                      }
-                      inputMode="decimal"
-                      placeholder="price"
-                      className={`${inputClass} w-24`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setItems(items.filter((_, i) => i !== idx))}
-                      className="text-sm text-zinc-400 hover:text-red-600"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {members.map((m) => {
-                      const w = item.weights[m.id] ?? 0;
-                      return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() =>
-                            setItems(
-                              items.map((r, i) =>
-                                i === idx
-                                  ? { ...r, weights: { ...r.weights, [m.id]: (w + 1) % 4 } }
-                                  : r,
-                              ),
-                            )
-                          }
-                          className={`rounded-full border px-2.5 py-0.5 text-xs ${
-                            w > 0
-                              ? "border-emerald-600 bg-emerald-50 text-emerald-700"
-                              : "border-zinc-300 text-zinc-400"
-                          }`}
-                        >
-                          {m.name}
-                          {w > 1 ? ` ×${w}` : ""}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+          ) : (
+            <div className="text-sm">
+              <span className="mb-1 block font-medium">
+                Total <span className="microlabel">{currency}</span>
+              </span>
+              <div className="rounded-lg border border-dashed border-line px-3 py-2 font-mono text-base tabular-nums text-ink-soft">
+                {itemizedTotal !== null ? formatCents(itemizedTotal, currency) : "—"}
+                <span className="ml-2 font-sans text-xs text-ink-faint">
+                  from receipt
+                </span>
+              </div>
             </div>
+          )}
+          <label className="text-sm">
+            <span className="mb-1 block font-medium">
+              Date paid{" "}
+              <span className="font-normal text-ink-faint">
+                (backdate freely)
+              </span>
+            </span>
+            <input
+              type="date"
+              value={paidAt}
+              onChange={(e) => setPaidAt(e.target.value)}
+              className="field font-mono"
+            />
+          </label>
+        </div>
+
+        {/* Payers */}
+        <section>
+          <h3 className="microlabel mb-2">Who paid?</h3>
+          {method !== "adjustment" && (
             <button
               type="button"
-              onClick={() => setItems([...items, { label: "", amountStr: "", weights: allWeightsOn() }])}
-              className="text-sm text-emerald-600 hover:underline"
+              role="switch"
+              aria-checked={someonePaid}
+              onClick={() => {
+                const next = !someonePaid;
+                setSomeonePaid(next);
+                if (next) for (const p of payers) includeInSplit(p.userId);
+              }}
+              className="mb-3 inline-flex min-h-9 items-center gap-2.5"
             >
-              + Add item
+              <span
+                className={`relative h-6 w-10 shrink-0 rounded-full border transition-colors duration-150 ${
+                  someonePaid ? "border-accent bg-accent" : "border-line bg-cream"
+                }`}
+              >
+                <span
+                  className={`absolute left-1 top-1 size-4 rounded-full transition-transform duration-150 ${
+                    someonePaid ? "translate-x-4 bg-cream" : "bg-ink-faint"
+                  }`}
+                />
+              </span>
+              <span className="text-sm font-medium">Someone fronted the bill</span>
             </button>
-
-            <div className="space-y-2 border-t border-zinc-100 pt-3">
-              <p className="text-sm font-medium">Tax / tip / service / discount</p>
-              {overheads.map((o, idx) => (
-                <div key={idx} className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={o.kind}
-                    onChange={(e) =>
-                      setOverheads(
-                        overheads.map((r, i) =>
-                          i === idx ? { ...r, kind: e.target.value as OverheadRow["kind"] } : r,
-                        ),
-                      )
-                    }
-                    className={inputClass}
-                  >
-                    <option value="tax">Tax</option>
-                    <option value="tip">Tip</option>
-                    <option value="service">Service charge</option>
-                    <option value="discount">Discount</option>
-                  </select>
+          )}
+          {kkbMode ? (
+            <div className="space-y-2">
+              <p className="text-sm leading-relaxed text-ink-soft">
+                Everyone pays their own share (KKB). The cash goes into one
+                pile — whoever holds it covers anyone who hasn&rsquo;t paid
+                yet. Leave someone&rsquo;s <strong>Bayad</strong> empty and
+                they stay <em>unpaid</em>, owing the cash holder until ticked
+                off on the expense page.
+              </p>
+              <label className="flex items-center gap-2 text-sm">
+                <span className="font-medium">Holding the cash:</span>
+                <Select
+                  value={payers[0]?.userId ?? ""}
+                  onChange={(e) => {
+                    setPayers([{ userId: e.target.value, amountStr: "" }]);
+                    includeInSplit(e.target.value);
+                  }}
+                  wrapperClassName="inline-block w-auto min-w-32"
+                >
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            </div>
+          ) : (
+          <div className="space-y-2">
+            {payers.map((p, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <Select
+                  value={p.userId}
+                  onChange={(e) => {
+                    setPayers(payers.map((row, i) => (i === idx ? { ...row, userId: e.target.value } : row)));
+                    includeInSplit(e.target.value);
+                  }}
+                  wrapperClassName="inline-block w-auto min-w-32"
+                >
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </Select>
+                {payers.length > 1 && (
                   <input
-                    value={o.amountStr}
+                    value={p.amountStr}
                     onChange={(e) =>
-                      setOverheads(overheads.map((r, i) => (i === idx ? { ...r, amountStr: e.target.value } : r)))
+                      setPayers(payers.map((row, i) => (i === idx ? { ...row, amountStr: e.target.value } : row)))
                     }
                     inputMode="decimal"
                     placeholder="amount"
-                    className={`${inputClass} w-24`}
+                    aria-label={`Amount paid by ${nameOf(p.userId)}`}
+                    className="field w-28 font-mono tabular-nums"
                   />
-                  <select
-                    value={o.distribution}
-                    onChange={(e) =>
-                      setOverheads(
-                        overheads.map((r, i) =>
-                          i === idx
-                            ? { ...r, distribution: e.target.value as OverheadRow["distribution"] }
-                            : r,
-                        ),
-                      )
-                    }
-                    className={inputClass}
+                )}
+                {payers.length > 1 && (
+                  <RemoveButton
+                    onClick={() => setPayers(payers.filter((_, i) => i !== idx))}
+                    label={`Remove payer ${nameOf(p.userId)}`}
+                  />
+                )}
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setPayers([...payers, { userId: members[0]?.id ?? "", amountStr: "" }]);
+                includeInSplit(members[0]?.id ?? "");
+              }}
+              className="inline-flex min-h-9 items-center gap-1.5 text-sm font-medium text-accent-deep transition-colors hover:text-accent"
+            >
+              <IconPlus className="size-3.5" />
+              Split the payment across another card/person
+            </button>
+            <p className="text-xs text-ink-faint">
+              The payer doesn&rsquo;t have to be part of the split —
+              &ldquo;I paid but didn&rsquo;t eat&rdquo; works.
+            </p>
+          </div>
+          )}
+        </section>
+
+        {/* Method picker */}
+        <section>
+          <h3 className="microlabel mb-2">Split method</h3>
+          <div
+            role="tablist"
+            aria-label="Split method"
+            className="flex gap-1 overflow-x-auto rounded-xl border border-line bg-cream p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            {METHODS.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                role="tab"
+                aria-selected={method === m.id}
+                onClick={() => setMethod(m.id)}
+                className={`shrink-0 rounded-lg px-3 py-2 font-mono text-xs font-medium uppercase tracking-wider transition duration-150 active:translate-y-px ${
+                  method === m.id
+                    ? "bg-ink text-cream"
+                    : "text-ink-faint hover:text-ink"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Method sub-forms */}
+          <div className="mt-3">
+            {method === "even" && (
+              <div className="space-y-2">
+                <p className="text-sm text-ink-soft">Split evenly between:</p>
+                <div className="flex flex-wrap gap-2">
+                  {members.map((m) => {
+                    const on = evenParticipants.has(m.id);
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => {
+                          const next = new Set(evenParticipants);
+                          if (on) next.delete(m.id);
+                          else next.add(m.id);
+                          setEvenParticipants(next);
+                        }}
+                        className={`chip ${on ? "chip-on" : "chip-off"}`}
+                      >
+                        {m.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {method === "exact" && (
+              <div className="space-y-2">
+                <p className="text-sm text-ink-soft">
+                  Exact amounts (leave blank to exclude). Must add up to the
+                  total.
+                </p>
+                {members.map((m) => (
+                  <label key={m.id} className="flex items-center gap-3 text-sm">
+                    <span className="w-32 truncate">{m.name}</span>
+                    <input
+                      value={exactAmounts[m.id] ?? ""}
+                      onChange={(e) => setExactAmounts({ ...exactAmounts, [m.id]: e.target.value })}
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      className="field w-28 font-mono tabular-nums"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {method === "shares" && (
+              <div className="space-y-2">
+                <p className="text-sm text-ink-soft">
+                  Weights — e.g. 2 for the couple, 1 for each single. 0
+                  excludes.
+                </p>
+                {members.map((m) => (
+                  <label key={m.id} className="flex items-center gap-3 text-sm">
+                    <span className="w-32 truncate">{m.name}</span>
+                    <input
+                      value={shareCounts[m.id] ?? ""}
+                      onChange={(e) => setShareCounts({ ...shareCounts, [m.id]: e.target.value })}
+                      inputMode="numeric"
+                      className="field w-20 font-mono tabular-nums"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {method === "percent" && (
+              <div className="space-y-2">
+                <p className="text-sm text-ink-soft">
+                  Percentages (up to 2 decimals). Must total exactly 100%.
+                </p>
+                {members.map((m) => (
+                  <label key={m.id} className="flex items-center gap-3 text-sm">
+                    <span className="w-32 truncate">{m.name}</span>
+                    <input
+                      value={percents[m.id] ?? ""}
+                      onChange={(e) => setPercents({ ...percents, [m.id]: e.target.value })}
+                      inputMode="decimal"
+                      placeholder="33.33"
+                      className="field w-24 font-mono tabular-nums"
+                    />
+                    <span className="text-ink-faint">%</span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {method === "adjustment" && (
+              <div className="space-y-2 text-sm">
+                <p className="text-ink-soft">
+                  Quick IOU — the whole amount is owed by one person to the
+                  payer. (&ldquo;You spotted me ₱200 at the arcade.&rdquo;)
+                </p>
+                <label className="flex items-center gap-2">
+                  <span>Who owes:</span>
+                  <Select
+                    value={owerId}
+                    onChange={(e) => setOwerId(e.target.value)}
+                    wrapperClassName="inline-block w-auto min-w-32"
                   >
-                    <option value="proportional">proportional to what you ate</option>
-                    <option value="even">split evenly</option>
-                  </select>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              </div>
+            )}
+
+            {method === "itemized" && (
+              <div className="space-y-4">
+                <p className="text-sm leading-relaxed text-ink-soft">
+                  Enter the receipt line by line. Bump the qty when the same
+                  order was had by more than one person, then tap names to
+                  toggle who had each item.
+                </p>
+                <div className="space-y-3">
+                  {items.map((item, idx) => {
+                    const unitCents = parseAmountToCents(item.amountStr, currency);
+                    const lineTotalCents = itemizedItemCents[idx];
+                    return (
+                    <div
+                      key={idx}
+                      className="rounded-xl border border-line bg-cream p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={item.label}
+                          onChange={(e) =>
+                            setItems(items.map((r, i) => (i === idx ? { ...r, label: e.target.value } : r)))
+                          }
+                          placeholder={`Item ${idx + 1} — e.g. Caesar salad`}
+                          className="field min-w-0 flex-1"
+                        />
+                        <input
+                          value={item.amountStr}
+                          onChange={(e) =>
+                            setItems(items.map((r, i) => (i === idx ? { ...r, amountStr: e.target.value } : r)))
+                          }
+                          inputMode="decimal"
+                          placeholder={item.qty > 1 ? "each" : "price"}
+                          aria-label={`Price of item ${idx + 1}${item.qty > 1 ? " (each)" : ""}`}
+                          className="field w-[4.5rem] font-mono tabular-nums"
+                        />
+                        <div className="flex shrink-0 items-center overflow-hidden rounded-lg border border-line bg-cream">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setItems(
+                                items.map((r, i) =>
+                                  i === idx ? { ...r, qty: Math.max(1, r.qty - 1) } : r,
+                                ),
+                              )
+                            }
+                            disabled={item.qty <= 1}
+                            aria-label={`Decrease quantity of item ${idx + 1}`}
+                            className="flex size-7 items-center justify-center text-ink-faint transition-colors hover:bg-line-soft active:translate-y-px disabled:opacity-30"
+                          >
+                            <IconMinus className="size-3.5" />
+                          </button>
+                          <span
+                            aria-label={`Quantity of item ${idx + 1}`}
+                            className="w-4 text-center font-mono text-xs tabular-nums"
+                          >
+                            {item.qty}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setItems(
+                                items.map((r, i) => (i === idx ? { ...r, qty: r.qty + 1 } : r)),
+                              )
+                            }
+                            aria-label={`Increase quantity of item ${idx + 1}`}
+                            className="flex size-7 items-center justify-center text-ink-faint transition-colors hover:bg-line-soft active:translate-y-px"
+                          >
+                            <IconPlus className="size-3.5" />
+                          </button>
+                        </div>
+                        <RemoveButton
+                          onClick={() => setItems(items.filter((_, i) => i !== idx))}
+                          label={`Remove item ${idx + 1}`}
+                        />
+                      </div>
+                      {item.qty > 1 && unitCents !== null && lineTotalCents !== null && (
+                        <p className="mt-1.5 text-xs text-ink-faint">
+                          <span className="font-mono tabular-nums text-ink-soft">
+                            {formatCents(lineTotalCents, currency)}
+                          </span>{" "}
+                          total ({item.qty} × {formatCents(unitCents, currency)} each)
+                        </p>
+                      )}
+                      <div className="mt-2.5 flex flex-wrap gap-1.5">
+                        {members.map((m) => {
+                          const w = item.weights[m.id] ?? 0;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              aria-pressed={w > 0}
+                              onClick={() =>
+                                setItems(
+                                  items.map((r, i) =>
+                                    i === idx
+                                      ? { ...r, weights: { ...r.weights, [m.id]: w > 0 ? 0 : 1 } }
+                                      : r,
+                                  ),
+                                )
+                              }
+                              className={`chip min-h-7 px-2.5 py-0.5 text-xs ${
+                                w > 0 ? "chip-on" : "chip-off"
+                              }`}
+                            >
+                              {m.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setItems([...items, { label: "", amountStr: "", qty: 1, weights: allWeightsOn() }])}
+                  className="inline-flex min-h-9 items-center gap-1.5 text-sm font-medium text-accent-deep transition-colors hover:text-accent"
+                >
+                  <IconPlus className="size-3.5" />
+                  Add item
+                </button>
+
+                <div className="space-y-2 border-t border-dashed border-line pt-4">
+                  <p className="microlabel">Tax · tip · service · discount</p>
+                  {overheads.map((o, idx) => (
+                    <div key={idx} className="flex flex-wrap items-center gap-2">
+                      <Select
+                        value={o.kind}
+                        onChange={(e) =>
+                          setOverheads(
+                            overheads.map((r, i) =>
+                              i === idx ? { ...r, kind: e.target.value as OverheadRow["kind"] } : r,
+                            ),
+                          )
+                        }
+                        wrapperClassName="inline-block w-auto"
+                      >
+                        <option value="tax">Tax</option>
+                        <option value="tip">Tip</option>
+                        <option value="service">Service charge</option>
+                        <option value="discount">Discount</option>
+                      </Select>
+                      <input
+                        value={o.amountStr}
+                        onChange={(e) =>
+                          setOverheads(overheads.map((r, i) => (i === idx ? { ...r, amountStr: e.target.value } : r)))
+                        }
+                        inputMode="decimal"
+                        placeholder="amount"
+                        aria-label={`${o.kind} amount`}
+                        className="field w-24 font-mono tabular-nums"
+                      />
+                      <Select
+                        value={o.distribution}
+                        onChange={(e) =>
+                          setOverheads(
+                            overheads.map((r, i) =>
+                              i === idx
+                                ? { ...r, distribution: e.target.value as OverheadRow["distribution"] }
+                                : r,
+                            ),
+                          )
+                        }
+                        wrapperClassName="inline-block w-auto"
+                      >
+                        <option value="proportional">proportional to what you ate</option>
+                        <option value="even">split evenly</option>
+                      </Select>
+                      <RemoveButton
+                        onClick={() => setOverheads(overheads.filter((_, i) => i !== idx))}
+                        label={`Remove ${o.kind}`}
+                      />
+                    </div>
+                  ))}
                   <button
                     type="button"
-                    onClick={() => setOverheads(overheads.filter((_, i) => i !== idx))}
-                    className="text-sm text-zinc-400 hover:text-red-600"
+                    onClick={() =>
+                      setOverheads([
+                        ...overheads,
+                        { kind: "tip", label: "", amountStr: "", distribution: "proportional" },
+                      ])
+                    }
+                    className="inline-flex min-h-9 items-center gap-1.5 text-sm font-medium text-accent-deep transition-colors hover:text-accent"
                   >
-                    ✕
+                    <IconPlus className="size-3.5" />
+                    Add tax/tip/discount
                   </button>
                 </div>
-              ))}
-              <button
-                type="button"
-                onClick={() =>
-                  setOverheads([
-                    ...overheads,
-                    { kind: "tip", label: "", amountStr: "", distribution: "proportional" },
-                  ])
-                }
-                className="text-sm text-emerald-600 hover:underline"
-              >
-                + Add tax/tip/discount
-              </button>
-            </div>
+              </div>
+            )}
           </div>
-        )}
+        </section>
       </div>
 
       {/* Live preview — same computeShares the server runs */}
-      <div className="rounded-lg border border-zinc-200 bg-white p-4">
-        <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          {method === "itemized" ? "Preview & sukli calculator" : "Preview"}
-        </h3>
-        {"error" in preview ? (
-          <p className="text-sm text-amber-600">{preview.error}</p>
-        ) : method === "itemized" ? (
-          <div className="space-y-1">
-            <div className="grid grid-cols-[1fr_5rem_6rem_6rem] items-center gap-2 text-xs font-medium uppercase tracking-wide text-zinc-400">
-              <span />
-              <span className="text-right">Share</span>
-              <span className="text-right">Bayad</span>
-              <span className="text-right">Sukli</span>
-            </div>
-            {[...preview.entries()]
-              .sort((a, b) => b[1] - a[1])
-              .map(([uid, cents]) => {
-                const raw = (bayad[uid] ?? "").trim();
-                const paid = raw === "" ? null : parseAmountToCents(raw, currency);
-                const sukli = paid === null ? null : paid - cents;
+      <div className="mt-6 lg:sticky lg:top-20 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:mt-0">
+        <div className="card tear-b p-4">
+          <h3 className="microlabel mb-3 border-b border-dashed border-line pb-2">
+            {method === "itemized" ? "Preview · sukli calculator" : "Preview"}
+          </h3>
+          {"error" in preview ? (
+            <p className="text-sm text-warn">{preview.error}</p>
+          ) : method === "itemized" ? (
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-[minmax(0,1fr)_4rem_4.5rem_4.5rem] items-center gap-1.5 pb-1 microlabel">
+                <span />
+                <span className="text-right">Share</span>
+                <span className="text-right">Bayad</span>
+                <span className="text-right">Sukli</span>
+              </div>
+              {[...preview.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([uid, cents]) => {
+                  const raw = (bayad[uid] ?? "").trim();
+                  const paid = raw === "" ? null : parseAmountToCents(raw, currency);
+                  const sukli = paid === null ? null : paid - cents;
+                  return (
+                    <div
+                      key={uid}
+                      className="grid grid-cols-[minmax(0,1fr)_4rem_4.5rem_4.5rem] items-center gap-1.5 text-sm"
+                    >
+                      <span className="truncate">{nameOf(uid)}</span>
+                      <span className="text-right font-mono font-medium tabular-nums">
+                        {formatCents(cents, currency)}
+                      </span>
+                      <input
+                        value={bayad[uid] ?? ""}
+                        onChange={(e) => setBayad({ ...bayad, [uid]: e.target.value })}
+                        inputMode="decimal"
+                        placeholder="cash"
+                        aria-label={`Cash handed over by ${nameOf(uid)}`}
+                        className="field px-2 py-1 text-right font-mono text-sm tabular-nums"
+                      />
+                      <span className="text-right font-mono text-xs tabular-nums">
+                        {raw === "" ? (
+                          <span className="text-line">—</span>
+                        ) : sukli === null ? (
+                          <span className="text-neg">?</span>
+                        ) : sukli >= 0 ? (
+                          <span className="font-medium text-pos">
+                            {formatCents(sukli, currency)}
+                          </span>
+                        ) : (
+                          <span className="font-medium text-neg">
+                            kulang {formatCents(-sukli, currency)}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              {(() => {
+                const rows = [...preview.entries()].map(([uid, cents]) => {
+                  const raw = (bayad[uid] ?? "").trim();
+                  const paid = raw === "" ? null : parseAmountToCents(raw, currency);
+                  return { cents, paid };
+                });
+                const entered = rows.filter((r) => r.paid !== null);
+                if (entered.length === 0) {
+                  return (
+                    <p className="border-t border-dashed border-line pt-2 text-xs leading-relaxed text-ink-faint">
+                      Type each person&rsquo;s cash under{" "}
+                      <strong>Bayad</strong> to get their sukli.{" "}
+                      {initial
+                        ? "This is just a table-side calculator — it doesn't change what gets recorded."
+                        : kkbMode
+                          ? "Cash entered here is recorded as paid to whoever holds the pile — left empty, that person shows as unpaid and owes their share."
+                          : "Cash entered here is recorded as payment to whoever fronted the bill — overpay and the sukli shows up as owed back."}
+                    </p>
+                  );
+                }
+                const collected = entered.reduce((s, r) => s + (r.paid ?? 0), 0);
+                const changeBack = entered.reduce(
+                  (s, r) => s + Math.max(0, (r.paid ?? 0) - r.cents),
+                  0,
+                );
+                const short = entered.reduce(
+                  (s, r) => s + Math.max(0, r.cents - (r.paid ?? 0)),
+                  0,
+                );
                 return (
-                  <div
-                    key={uid}
-                    className="grid grid-cols-[1fr_5rem_6rem_6rem] items-center gap-2 text-sm"
-                  >
-                    <span className="truncate">{nameOf(uid)}</span>
-                    <span className="text-right font-medium">
-                      {formatCents(cents, currency)}
-                    </span>
-                    <input
-                      value={bayad[uid] ?? ""}
-                      onChange={(e) => setBayad({ ...bayad, [uid]: e.target.value })}
-                      inputMode="decimal"
-                      placeholder="cash"
-                      className={`${inputClass} w-full text-right`}
-                    />
-                    <span className="text-right">
-                      {raw === "" ? (
-                        <span className="text-zinc-300">—</span>
-                      ) : sukli === null ? (
-                        <span className="text-red-600">?</span>
-                      ) : sukli >= 0 ? (
-                        <span className="font-medium text-emerald-600">
-                          {formatCents(sukli, currency)}
-                        </span>
-                      ) : (
-                        <span className="font-medium text-red-600">
-                          kulang {formatCents(-sukli, currency)}
-                        </span>
-                      )}
-                    </span>
+                  <div className="space-y-1 border-t border-dashed border-line pt-2 text-xs text-ink-soft">
+                    <p className="flex items-baseline justify-between gap-2">
+                      <span>Collected</span>
+                      <strong className="font-mono tabular-nums">
+                        {formatCents(collected, currency)}
+                      </strong>
+                    </p>
+                    <p className="flex items-baseline justify-between gap-2">
+                      <span>Sukli to hand back</span>
+                      <strong className="font-mono tabular-nums text-pos">
+                        {formatCents(changeBack, currency)}
+                      </strong>
+                    </p>
+                    {short > 0 && (
+                      <p className="flex items-baseline justify-between gap-2">
+                        <span>Still kulang</span>
+                        <strong className="font-mono tabular-nums text-neg">
+                          {formatCents(short, currency)}
+                        </strong>
+                      </p>
+                    )}
                   </div>
                 );
-              })}
-            {(() => {
-              const rows = [...preview.entries()].map(([uid, cents]) => {
-                const raw = (bayad[uid] ?? "").trim();
-                const paid = raw === "" ? null : parseAmountToCents(raw, currency);
-                return { cents, paid };
-              });
-              const entered = rows.filter((r) => r.paid !== null);
-              if (entered.length === 0) {
-                return (
-                  <p className="border-t border-zinc-100 pt-2 text-xs text-zinc-400">
-                    Type each person&rsquo;s cash under <strong>Bayad</strong>{" "}
-                    to get their sukli. This is just a table-side calculator —
-                    it doesn&rsquo;t change what gets recorded.
-                  </p>
-                );
-              }
-              const collected = entered.reduce((s, r) => s + (r.paid ?? 0), 0);
-              const changeBack = entered.reduce(
-                (s, r) => s + Math.max(0, (r.paid ?? 0) - r.cents),
-                0,
-              );
-              const short = entered.reduce(
-                (s, r) => s + Math.max(0, r.cents - (r.paid ?? 0)),
-                0,
-              );
-              return (
-                <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 border-t border-zinc-100 pt-2 text-xs text-zinc-500">
-                  <span>
-                    Collected: <strong>{formatCents(collected, currency)}</strong>
-                  </span>
-                  <span>
-                    Sukli to hand back:{" "}
-                    <strong className="text-emerald-600">
-                      {formatCents(changeBack, currency)}
-                    </strong>
-                  </span>
-                  {short > 0 && (
-                    <span>
-                      Still kulang:{" "}
-                      <strong className="text-red-600">
-                        {formatCents(short, currency)}
-                      </strong>
+              })()}
+            </div>
+          ) : (
+            <ul className="space-y-1 text-sm">
+              {[...preview.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([uid, cents]) => (
+                  <li key={uid} className="flex items-baseline justify-between gap-2">
+                    <span className="truncate">{nameOf(uid)}</span>
+                    <span className="font-mono font-medium tabular-nums">
+                      {formatCents(cents, currency)}
                     </span>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        ) : (
-          <ul className="space-y-1 text-sm">
-            {[...preview.entries()]
-              .sort((a, b) => b[1] - a[1])
-              .map(([uid, cents]) => (
-                <li key={uid} className="flex justify-between">
-                  <span>{nameOf(uid)}</span>
-                  <span className="font-medium">{formatCents(cents, currency)}</span>
-                </li>
-              ))}
-            <li className="flex justify-between border-t border-zinc-100 pt-1 text-zinc-500">
-              <span>Unallocated</span>
-              <span>{formatCents(0, currency)} ✓</span>
-            </li>
-          </ul>
-        )}
+                  </li>
+                ))}
+              <li className="mt-1 flex items-baseline justify-between gap-2 border-t border-dashed border-line pt-2 text-ink-faint">
+                <span className="inline-flex items-center gap-1">
+                  Unallocated
+                  <IconCheck className="size-3.5 text-pos" />
+                </span>
+                <span className="font-mono tabular-nums">
+                  {formatCents(0, currency)}
+                </span>
+              </li>
+            </ul>
+          )}
+        </div>
       </div>
 
-      <label className="block text-sm">
-        <span className="mb-1 block font-medium">Notes (optional)</span>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          maxLength={500}
-          rows={2}
-          className={`${inputClass} w-full`}
-        />
-      </label>
+      <div className="mt-6 space-y-4 lg:col-start-1 lg:row-start-2 lg:mt-0">
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium">Notes (optional)</span>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            maxLength={500}
+            rows={2}
+            className="field"
+          />
+        </label>
 
-      {(formError || serverError) && (
-        <p className="text-sm text-red-600">{serverError ?? formError}</p>
-      )}
+        {(formError || serverError) && (
+          <p role="alert" className="text-sm text-neg">
+            {serverError ?? formError}
+          </p>
+        )}
 
-      <button
-        type="button"
-        disabled={!canSubmit}
-        onClick={submit}
-        className="w-full rounded-md bg-emerald-600 px-4 py-2.5 font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
-      >
-        {pending ? "Saving…" : initial ? "Save changes" : "Add expense"}
-      </button>
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={submit}
+          className="btn btn-primary min-h-12 w-full px-4 text-base"
+        >
+          {pending ? "Saving…" : initial ? "Save changes" : "Add expense"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -22,6 +22,19 @@ export const expensePayloadSchema = z.object({
       }),
     )
     .min(1, "At least one payer"),
+  /**
+   * Table-side cash handed to the payer at creation time (the "Bayad" column).
+   * Recorded as settlements linked to the expense — overpaying is legal and
+   * simply leaves sukli owed back.
+   */
+  payments: z
+    .array(
+      z.object({
+        userId: z.string().min(1),
+        amountCents: cents.refine((n) => n > 0),
+      }),
+    )
+    .optional(),
   split: splitInputSchema,
 });
 

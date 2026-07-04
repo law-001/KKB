@@ -1,26 +1,188 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * KKB design system — "thermal receipt ledger".
+ * Warm paper + ink, one burnt-tangerine accent, mono for every number.
+ * Tokens documented in DESIGN.md.
+ */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  --color-paper: oklch(97.3% 0.009 84);
+  --color-cream: oklch(99.3% 0.005 88);
+  --color-ink: oklch(24% 0.015 60);
+  --color-ink-soft: oklch(44% 0.02 66);
+  --color-ink-faint: oklch(55% 0.018 70);
+  --color-line: oklch(87.5% 0.014 80);
+  --color-line-soft: oklch(92.5% 0.01 82);
+
+  --color-accent: oklch(55% 0.145 45);
+  --color-accent-deep: oklch(48% 0.14 43);
+  --color-accent-soft: oklch(94.5% 0.03 60);
+
+  --color-pos: oklch(50% 0.115 158);
+  --color-pos-soft: oklch(95.5% 0.028 158);
+  --color-neg: oklch(51% 0.15 27);
+  --color-neg-soft: oklch(95.5% 0.02 27);
+  --color-warn: oklch(53% 0.12 70);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  button,
+  [role="button"] {
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  ::selection {
+    background-color: var(--color-accent-soft);
+    color: var(--color-accent-deep);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  .field {
+    @apply w-full rounded-lg border border-line bg-cream px-3 py-2 text-base text-ink transition-colors placeholder:text-ink-faint/60 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15;
+  }
+
+  /* Dropdown: same shell as .field, appearance stripped so the chevron
+     rendered by <Select> (ui.tsx) is the only arrow the user sees. */
+  .select {
+    @apply cursor-pointer appearance-none rounded-lg border border-line bg-cream py-2 pl-3 pr-8 text-base text-ink transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .select::-ms-expand {
+    display: none;
+  }
+
+  /* Custom checkbox shell: a stamped square that fills with accent when its
+     descendant input is checked. Pair with an <input class="peer" /> and an
+     <IconCheck class="peer-checked:scale-100" /> inside — `peer` only works
+     as a literal class in markup, so that half lives in the component. */
+  .checkbox {
+    @apply relative flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border border-line bg-cream transition-colors has-checked:border-accent has-checked:bg-accent has-disabled:cursor-not-allowed has-disabled:opacity-50 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent;
+  }
+
+  .btn {
+    @apply inline-flex cursor-pointer select-none items-center justify-center gap-1.5 rounded-lg font-medium transition duration-150 active:translate-y-px disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply bg-accent text-cream hover:bg-accent-deep;
+  }
+  .btn-stamp {
+    @apply bg-ink text-cream hover:bg-ink/85;
+  }
+  .btn-ghost {
+    @apply border border-line bg-cream text-ink-soft hover:border-ink-faint/60 hover:text-ink;
+  }
+  .btn-danger {
+    @apply border border-neg/30 bg-cream text-neg hover:bg-neg-soft;
+  }
+
+  .card {
+    @apply rounded-xl border border-line bg-cream;
+  }
+
+  .microlabel {
+    @apply font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-ink-faint;
+  }
+
+  .chip {
+    @apply inline-flex min-h-8 cursor-pointer select-none items-center rounded-full border px-3 py-1 text-sm transition duration-150 active:translate-y-px;
+  }
+  .chip-off {
+    @apply border-line bg-cream text-ink-faint hover:border-ink-faint/60 hover:text-ink-soft;
+  }
+  .chip-on {
+    @apply border-accent/50 bg-accent-soft font-medium text-accent-deep;
+  }
+
+  /* Confirm dialog: native <dialog>, styled like a torn-off receipt stub. */
+  .confirm-dialog {
+    @apply m-auto w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-line bg-cream p-0 shadow-[0_24px_60px_-24px_rgba(36,26,15,0.35)];
+  }
+  .confirm-dialog::backdrop {
+    @apply bg-ink/35;
+  }
+  .confirm-dialog[open] {
+    animation: confirm-dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+
+@keyframes confirm-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirm-dialog[open] {
+    animation: none;
+  }
+}
+
+@utility tear-b {
+  /* Zigzag torn edge along the bottom, like a receipt pulled off the printer. */
+  mask: conic-gradient(
+      from -45deg at bottom,
+      #0000,
+      #000 1deg 89deg,
+      #0000 90deg
+    )
+    50% / 14px 100%;
+  padding-bottom: calc(--spacing(4) + 8px);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@utility rise {
+  animation: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@utility rise-1 {
+  animation-delay: 60ms;
+}
+@utility rise-2 {
+  animation-delay: 120ms;
+}
+@utility rise-3 {
+  animation-delay: 180ms;
+}
+@utility rise-4 {
+  animation-delay: 240ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
 }

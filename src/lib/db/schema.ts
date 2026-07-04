@@ -5,14 +5,22 @@
  * they're derived by summing expense_payers / expense_shares / settlements.
  * Editing an expense inserts a new row (supersedes_id chain); deleting flips
  * status. All money columns are integer minor units (cents). Never floats.
+ *
+ * Identity: users.id is the Supabase Auth user id (uuid, stored as text) for
+ * real accounts, set explicitly on first login — or an app-generated id for
+ * a ghost member (added by name, no login). NULL email = ghost. Supabase
+ * Auth owns passwords/sessions for real accounts; this table only holds
+ * app-facing profile data.
  */
 import {
   index,
   integer,
+  jsonb,
+  pgTable,
   primaryKey,
-  sqliteTable,
   text,
-} from "drizzle-orm/sqlite-core";
+  timestamp,
+} from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
 import type { SplitInput } from "@/lib/ledger/split";
 
@@ -22,31 +30,21 @@ const id = () =>
     .$defaultFn(() => nanoid(12));
 
 const createdAt = () =>
-  integer("created_at", { mode: "timestamp_ms" })
+  timestamp("created_at", { withTimezone: true })
     .notNull()
     .$defaultFn(() => new Date());
 
-export const users = sqliteTable("users", {
-  id: id(),
+export const users = pgTable("users", {
+  // Supabase Auth user id (uuid) for real accounts, supplied on first login;
+  // an app-generated nanoid for ghost members.
+  id: text("id").primaryKey(),
   name: text("name").notNull(),
-  // NULL email = "ghost" member added by name only (no account yet).
+  // NULL = ghost member (no Supabase Auth account backing this row).
   email: text("email").unique(),
-  passwordHash: text("password_hash"),
-  // Set when a real account claims a ghost's ledger history (Phase 3).
-  claimedBy: text("claimed_by"),
   createdAt: createdAt(),
 });
 
-export const sessions = sqliteTable("sessions", {
-  token: text("token").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id),
-  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
-  createdAt: createdAt(),
-});
-
-export const groups = sqliteTable("groups", {
+export const groups = pgTable("groups", {
   id: id(),
   name: text("name").notNull(),
   currency: text("currency").notNull(), // ISO 4217, e.g. "PHP"
@@ -60,7 +58,7 @@ export const groups = sqliteTable("groups", {
   createdAt: createdAt(),
 });
 
-export const groupMembers = sqliteTable(
+export const groupMembers = pgTable(
   "group_members",
   {
     groupId: text("group_id")
@@ -72,14 +70,14 @@ export const groupMembers = sqliteTable(
     role: text("role", { enum: ["admin", "member"] })
       .notNull()
       .default("member"),
-    joinedAt: integer("joined_at", { mode: "timestamp_ms" })
+    joinedAt: timestamp("joined_at", { withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.groupId, t.userId] })],
 );
 
-export const expenses = sqliteTable(
+export const expenses = pgTable(
   "expenses",
   {
     id: id(),
@@ -91,7 +89,7 @@ export const expenses = sqliteTable(
     currency: text("currency").notNull(),
     // When the money was spent — user-editable, distinct from createdAt.
     // Backdating "just works" because balance math never looks at dates.
-    paidAt: integer("paid_at", { mode: "timestamp_ms" }).notNull(),
+    paidAt: timestamp("paid_at", { withTimezone: true }).notNull(),
     createdBy: text("created_by")
       .notNull()
       .references(() => users.id),
@@ -105,7 +103,7 @@ export const expenses = sqliteTable(
     supersedesId: text("supersedes_id"),
     // The raw split input, kept so edits can re-open the form pre-filled.
     // The ledger truth is expense_shares (frozen output), never this.
-    splitInput: text("split_input", { mode: "json" }).$type<SplitInput>(),
+    splitInput: jsonb("split_input").$type<SplitInput>(),
     notes: text("notes"),
     createdAt: createdAt(),
   },
@@ -113,7 +111,7 @@ export const expenses = sqliteTable(
 );
 
 /** Supports "we put it on two cards" — how much each payer actually paid. */
-export const expensePayers = sqliteTable(
+export const expensePayers = pgTable(
   "expense_payers",
   {
     expenseId: text("expense_id")
@@ -132,7 +130,7 @@ export const expensePayers = sqliteTable(
  * time. INVARIANT: SUM(amount_cents) per expense == expenses.total_cents,
  * and likewise for expense_payers. Enforced in the write transaction.
  */
-export const expenseShares = sqliteTable(
+export const expenseShares = pgTable(
   "expense_shares",
   {
     expenseId: text("expense_id")
@@ -147,7 +145,7 @@ export const expenseShares = sqliteTable(
 );
 
 /** Only for itemized splits — items are input detail, shares are ledger truth. */
-export const expenseItems = sqliteTable("expense_items", {
+export const expenseItems = pgTable("expense_items", {
   id: id(),
   expenseId: text("expense_id")
     .notNull()
@@ -161,7 +159,7 @@ export const expenseItems = sqliteTable("expense_items", {
     .default("item"),
 });
 
-export const expenseItemConsumers = sqliteTable(
+export const expenseItemConsumers = pgTable(
   "expense_item_consumers",
   {
     itemId: text("item_id")
@@ -176,7 +174,7 @@ export const expenseItemConsumers = sqliteTable(
   (t) => [primaryKey({ columns: [t.itemId, t.userId] })],
 );
 
-export const settlements = sqliteTable(
+export const settlements = pgTable(
   "settlements",
   {
     id: id(),
@@ -191,7 +189,10 @@ export const settlements = sqliteTable(
       .references(() => users.id),
     amountCents: integer("amount_cents").notNull(),
     method: text("method"), // "GCash", "cash", ...
-    settledAt: integer("settled_at", { mode: "timestamp_ms" }).notNull(),
+    // Set when this settlement is table-side cash (bayad/sukli) for one
+    // specific expense; NULL for free-standing settle-up payments.
+    expenseId: text("expense_id").references(() => expenses.id),
+    settledAt: timestamp("settled_at", { withTimezone: true }).notNull(),
     // Only 'confirmed' rows count toward balances — the recipient confirms.
     status: text("status", { enum: ["pending", "confirmed", "rejected"] })
       .notNull()
@@ -201,7 +202,7 @@ export const settlements = sqliteTable(
   (t) => [index("settlements_group_status_idx").on(t.groupId, t.status)],
 );
 
-export const activityLog = sqliteTable(
+export const activityLog = pgTable(
   "activity_log",
   {
     id: id(),
@@ -212,7 +213,7 @@ export const activityLog = sqliteTable(
       .notNull()
       .references(() => users.id),
     verb: text("verb").notNull(), // 'expense.created', 'settlement.confirmed', ...
-    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
     createdAt: createdAt(),
   },
   (t) => [index("activity_group_idx").on(t.groupId, t.createdAt)],

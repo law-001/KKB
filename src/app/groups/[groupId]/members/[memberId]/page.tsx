@@ -1,13 +1,13 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  getExpenseDetail,
   getGroup,
-  getGroupExpenses,
   getGroupMembers,
   getGroupSettlements,
+  getMemberExpenseRows,
 } from "@/lib/db/queries";
+import { requireGroupMember } from "@/lib/auth";
 import { formatCents } from "@/lib/ledger/money";
+import { Amount, BackLink, PageHeader } from "@/components/ui";
 
 /**
  * A member's full tab: every expense and settlement that touched their
@@ -19,10 +19,15 @@ export default async function MemberTabPage(props: {
   params: Promise<{ groupId: string; memberId: string }>;
 }) {
   const { groupId, memberId } = await props.params;
-  const group = getGroup(groupId);
+  await requireGroupMember(groupId);
+  const [group, members, memberExpenses, settlements] = await Promise.all([
+    getGroup(groupId),
+    getGroupMembers(groupId),
+    getMemberExpenseRows(groupId, memberId),
+    getGroupSettlements(groupId),
+  ]);
   if (!group) notFound();
 
-  const members = getGroupMembers(groupId);
   const member = members.find((m) => m.id === memberId);
   if (!member) notFound();
   const nameOf = (id: string) => members.find((m) => m.id === id)?.name ?? "?";
@@ -35,25 +40,17 @@ export default async function MemberTabPage(props: {
     deltaCents: number;
   }[] = [];
 
-  for (const e of getGroupExpenses(groupId)) {
-    const detail = getExpenseDetail(e.id);
-    if (!detail) continue;
-    const paid =
-      detail.payers.find((p) => p.userId === memberId)?.amountCents ?? 0;
-    const share =
-      detail.shares.find((s) => s.userId === memberId)?.amountCents ?? 0;
-    const delta = paid - share;
-    if (paid !== 0 || share !== 0) {
-      rows.push({
-        date: e.paidAt,
-        label: e.description,
-        detail: `paid ${formatCents(paid, e.currency)} · share ${formatCents(share, e.currency)}`,
-        deltaCents: delta,
-      });
-    }
+  for (const e of memberExpenses) {
+    if (e.paidCents === 0 && e.shareCents === 0) continue;
+    rows.push({
+      date: e.paidAt,
+      label: e.description,
+      detail: `paid ${formatCents(e.paidCents, e.currency)} · share ${formatCents(e.shareCents, e.currency)}`,
+      deltaCents: e.paidCents - e.shareCents,
+    });
   }
 
-  for (const s of getGroupSettlements(groupId)) {
+  for (const s of settlements) {
     if (s.status !== "confirmed") continue;
     if (s.fromUser === memberId) {
       rows.push({
@@ -81,54 +78,62 @@ export default async function MemberTabPage(props: {
   const final = running;
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">{member.name}&rsquo;s tab</h1>
-      <p
-        className={`rounded-lg border px-4 py-3 text-sm ${
+    <div className="mx-auto max-w-2xl space-y-6">
+      <div className="rise">
+        <PageHeader eyebrow={group.name} title={`${member.name}’s tab`} />
+      </div>
+
+      <div
+        className={`rise rise-1 rounded-xl px-4 py-3.5 text-sm leading-relaxed ${
           final > 0
-            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+            ? "bg-pos-soft text-pos"
             : final < 0
-              ? "border-red-200 bg-red-50 text-red-800"
-              : "border-zinc-200 bg-white text-zinc-600"
+              ? "bg-neg-soft text-neg"
+              : "border border-line bg-cream text-ink-soft"
         }`}
       >
         {final > 0 && (
           <>
             The group owes {member.name}{" "}
-            <strong>{formatCents(final, group.currency)}</strong> across{" "}
-            {rows.length} entr{rows.length === 1 ? "y" : "ies"}
+            <strong className="font-mono tabular-nums">
+              {formatCents(final, group.currency)}
+            </strong>{" "}
+            across {rows.length} entr{rows.length === 1 ? "y" : "ies"}
           </>
         )}
         {final < 0 && (
           <>
             {member.name} owes the group{" "}
-            <strong>{formatCents(-final, group.currency)}</strong> across{" "}
-            {rows.length} entr{rows.length === 1 ? "y" : "ies"}
+            <strong className="font-mono tabular-nums">
+              {formatCents(-final, group.currency)}
+            </strong>{" "}
+            across {rows.length} entr{rows.length === 1 ? "y" : "ies"}
           </>
         )}
         {final === 0 && <>{member.name} is all square.</>}
-      </p>
+      </div>
 
       {withRunning.length > 0 && (
-        <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white text-sm">
+        <ul className="rise rise-2 divide-y divide-line-soft overflow-hidden rounded-xl border border-line bg-cream text-sm">
           {withRunning.map((r, i) => (
-            <li key={i} className="flex items-center justify-between px-4 py-2.5">
-              <span>
-                <span className="font-medium">{r.label}</span>
-                <span className="ml-2 text-xs text-zinc-400">
+            <li
+              key={i}
+              className="flex items-center justify-between gap-4 px-4 py-3"
+            >
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{r.label}</span>
+                <span className="microlabel mt-0.5 block normal-case tracking-normal">
                   {r.date.toLocaleDateString()} · {r.detail}
                 </span>
               </span>
-              <span className="text-right">
-                <span
-                  className={
-                    r.deltaCents > 0 ? "text-emerald-600" : "text-red-600"
-                  }
-                >
-                  {r.deltaCents > 0 ? "+" : ""}
-                  {formatCents(r.deltaCents, group.currency)}
-                </span>
-                <span className="ml-3 text-xs text-zinc-400">
+              <span className="shrink-0 text-right">
+                <Amount
+                  cents={r.deltaCents}
+                  currency={group.currency}
+                  signed
+                  className="block font-medium"
+                />
+                <span className="microlabel mt-0.5 block normal-case tracking-normal">
                   bal {formatCents(r.running, group.currency)}
                 </span>
               </span>
@@ -137,12 +142,9 @@ export default async function MemberTabPage(props: {
         </ul>
       )}
 
-      <Link
-        href={`/groups/${groupId}`}
-        className="inline-block text-sm text-emerald-600 hover:underline"
-      >
-        ← Back to group
-      </Link>
+      <div className="rise rise-3">
+        <BackLink href={`/groups/${groupId}`}>Back to group</BackLink>
+      </div>
     </div>
   );
 }
