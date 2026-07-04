@@ -1,8 +1,8 @@
 import { ImageResponse } from "next/og";
 
 // The rubber-stamp brand mark from DESIGN.md, rendered as the favicon —
-// cream-filled outline box, transparent canvas around it, no rotation
-// (reads cleanly at browser-tab scale).
+// cream-filled outline box on a rounded cream backdrop so it reads on dark
+// browser chrome, no rotation (reads cleanly at browser-tab scale).
 export const size = { width: 32, height: 32 };
 export const contentType = "image/png";
 
@@ -16,6 +16,8 @@ export default function Icon() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          background: "#f7f3ee",
+          borderRadius: 8,
         }}
       >
         <div
@@ -23,8 +25,8 @@ export default function Icon() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            width: 29,
-            height: 21,
+            width: 28,
+            height: 20,
             border: "3px solid #2b2420",
             borderRadius: 5,
             background: "#f7f3ee",
