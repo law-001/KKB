@@ -189,8 +189,8 @@ export function ExpenseForm({
   // in KKB mode, to whoever holds the cash pile).
   const [bayad, setBayad] = useState<Record<string, string>>({});
 
-  const allWeightsOn = () =>
-    Object.fromEntries(members.map((m) => [m.id, 1]));
+  const allWeightsOff = () =>
+    Object.fromEntries(members.map((m) => [m.id, 0]));
   const [items, setItems] = useState<ItemRow[]>(() =>
     initialSplit?.method === "itemized"
       ? initialSplit.items.map((i) => ({
@@ -204,7 +204,7 @@ export function ExpenseForm({
             ...Object.fromEntries(i.consumers.map((c) => [c.userId, c.weight > 0 ? 1 : 0])),
           },
         }))
-      : [{ label: "", amountStr: "", qty: 1, weights: allWeightsOn() }],
+      : [{ label: "", amountStr: "", qty: 1, weights: allWeightsOff() }],
   );
   const [overheads, setOverheads] = useState<OverheadRow[]>(() =>
     initialSplit?.method === "itemized"
@@ -231,7 +231,7 @@ export function ExpenseForm({
         label: i.label,
         amountStr: toAmountStr(i.unitCents),
         qty: i.qty,
-        weights: allWeightsOn(),
+        weights: allWeightsOff(),
       })),
     ]);
     if (r.overheads.length > 0) {
@@ -901,7 +901,7 @@ export function ExpenseForm({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setItems([...items, { label: "", amountStr: "", qty: 1, weights: allWeightsOn() }])}
+                  onClick={() => setItems([...items, { label: "", amountStr: "", qty: 1, weights: allWeightsOff() }])}
                   className="inline-flex min-h-9 items-center gap-1.5 text-sm font-medium text-accent-deep transition-colors hover:text-accent"
                 >
                   <IconPlus className="size-3.5" />
