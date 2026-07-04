@@ -227,7 +227,7 @@ export async function createExpense(
     throw e;
   }
 
-  revalidatePath(`/groups/${groupId}`);
+  revalidatePath(`/groups/${groupId}`, "layout");
   return { ok: true };
 }
 
@@ -287,7 +287,7 @@ export async function updateExpense(
     throw e;
   }
 
-  revalidatePath(`/groups/${old.groupId}`);
+  revalidatePath(`/groups/${old.groupId}`, "layout");
   return { ok: true };
 }
 
@@ -315,6 +315,6 @@ export async function deleteExpense(expenseId: string): Promise<ExpenseResult> {
   });
 
   if (!flipped) return { error: "Expense was already changed — reload" };
-  revalidatePath(`/groups/${old.groupId}`);
+  revalidatePath(`/groups/${old.groupId}`, "layout");
   return { ok: true };
 }

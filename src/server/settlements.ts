@@ -74,7 +74,7 @@ export async function createSettlement(
     });
   });
 
-  revalidatePath(`/groups/${groupId}`);
+  revalidatePath(`/groups/${groupId}`, "layout");
   return { ok: true };
 }
 
@@ -153,7 +153,7 @@ export async function recordExpensePayment(
     });
   });
 
-  revalidatePath(`/groups/${expense.groupId}`);
+  revalidatePath(`/groups/${expense.groupId}`, "layout");
   return { ok: true };
 }
 
@@ -205,6 +205,6 @@ export async function unmarkExpensePayments(
     }
   });
 
-  revalidatePath(`/groups/${expense.groupId}`);
+  revalidatePath(`/groups/${expense.groupId}`, "layout");
   return { ok: true };
 }

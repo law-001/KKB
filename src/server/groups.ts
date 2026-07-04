@@ -76,7 +76,7 @@ export async function joinGroup(code: string): Promise<void> {
     payload: { memberName: user.name },
   });
 
-  revalidatePath(`/groups/${group.id}`);
+  revalidatePath(`/groups/${group.id}`, "layout");
   redirect(`/groups/${group.id}`);
 }
 
@@ -115,7 +115,7 @@ export async function addGhostMember(
     });
   });
 
-  revalidatePath(`/groups/${groupId}`);
+  revalidatePath(`/groups/${groupId}`, "layout");
   return {};
 }
 
@@ -165,7 +165,7 @@ export async function removeMember(
     });
   });
 
-  revalidatePath(`/groups/${groupId}`);
+  revalidatePath(`/groups/${groupId}`, "layout");
   return {};
 }
 
@@ -188,6 +188,9 @@ export async function deleteGroup(groupId: string): Promise<FormState> {
         .from(tables.expenses)
         .where(eq(tables.expenses.groupId, groupId))
     ).map((e) => e.id);
+    // Settlements can reference a specific expense (bayad/sukli) via a FK,
+    // so they must go before the expenses they point at.
+    await tx.delete(tables.settlements).where(eq(tables.settlements.groupId, groupId));
     if (expenseIds.length > 0) {
       const itemIds = (
         await tx
@@ -211,7 +214,6 @@ export async function deleteGroup(groupId: string): Promise<FormState> {
         .where(inArray(tables.expensePayers.expenseId, expenseIds));
       await tx.delete(tables.expenses).where(eq(tables.expenses.groupId, groupId));
     }
-    await tx.delete(tables.settlements).where(eq(tables.settlements.groupId, groupId));
     await tx.delete(tables.activityLog).where(eq(tables.activityLog.groupId, groupId));
     await tx.delete(tables.groupMembers).where(eq(tables.groupMembers.groupId, groupId));
     await tx.delete(tables.groups).where(eq(tables.groups.id, groupId));
