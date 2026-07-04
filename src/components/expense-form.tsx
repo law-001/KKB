@@ -9,6 +9,8 @@ import {
 } from "@/lib/ledger/split";
 import { formatCents, parseAmountToCents } from "@/lib/ledger/money";
 import type { ExpensePayload } from "@/lib/expense-payload";
+import type { ScanResult } from "@/lib/receipt-scan";
+import { ReceiptScanButton } from "@/components/receipt-scan";
 import { IconCheck, IconMinus, IconPlus, IconX, Select } from "@/components/ui";
 
 export interface MemberOption {
@@ -77,6 +79,7 @@ export function ExpenseForm({
   defaultPayerId,
   initial,
   submitAction,
+  scanAction,
 }: {
   groupId: string;
   currency: string;
@@ -91,6 +94,8 @@ export function ExpenseForm({
     split: SplitInput | null;
   };
   submitAction: (payload: ExpensePayload) => Promise<{ ok?: boolean; error?: string }>;
+  /** When set (server has a scanner key), the itemized split offers photo scan. */
+  scanAction?: (input: unknown) => Promise<{ result?: ScanResult; error?: string }>;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -211,6 +216,38 @@ export function ExpenseForm({
         }))
       : [],
   );
+
+  // Grand total printed on a scanned receipt, kept so we can warn when the
+  // extracted lines don't add up to what the paper says.
+  const [scannedTotalCents, setScannedTotalCents] = useState<number | null>(null);
+
+  /** Prefill from a receipt photo. Appends, so typed rows are never lost. */
+  const applyScan = (r: ScanResult) => {
+    const blank = (row: ItemRow) =>
+      row.label.trim() === "" && row.amountStr.trim() === "";
+    setItems([
+      ...items.filter((row) => !blank(row)),
+      ...r.items.map((i) => ({
+        label: i.label,
+        amountStr: toAmountStr(i.unitCents),
+        qty: i.qty,
+        weights: allWeightsOn(),
+      })),
+    ]);
+    if (r.overheads.length > 0) {
+      setOverheads([
+        ...overheads.filter((o) => o.amountStr.trim() !== ""),
+        ...r.overheads.map((o) => ({
+          kind: o.kind,
+          label: o.label,
+          amountStr: toAmountStr(o.amountCents),
+          distribution: "proportional" as const,
+        })),
+      ]);
+    }
+    if (r.merchant && description.trim() === "") setDescription(r.merchant);
+    setScannedTotalCents(r.totalCents ?? null);
+  };
 
   // ── Derived: totals, split input, live preview ────────────────────────
   // amountStr is the price of one unit; the line total is unit × qty.
@@ -753,6 +790,9 @@ export function ExpenseForm({
                   order was had by more than one person, then tap names to
                   toggle who had each item.
                 </p>
+                {scanAction && (
+                  <ReceiptScanButton scanAction={scanAction} onResult={applyScan} />
+                )}
                 <div className="space-y-3">
                   {items.map((item, idx) => {
                     const unitCents = parseAmountToCents(item.amountStr, currency);
@@ -934,6 +974,21 @@ export function ExpenseForm({
                     Add tax/tip/discount
                   </button>
                 </div>
+                {scannedTotalCents !== null &&
+                  itemizedTotal !== null &&
+                  itemizedTotal !== scannedTotalCents && (
+                    <p className="text-xs leading-relaxed text-warn">
+                      The receipt prints{" "}
+                      <span className="font-mono tabular-nums">
+                        {formatCents(scannedTotalCents, currency)}
+                      </span>{" "}
+                      but these lines add up to{" "}
+                      <span className="font-mono tabular-nums">
+                        {formatCents(itemizedTotal, currency)}
+                      </span>{" "}
+                      — double-check the scanned lines.
+                    </p>
+                  )}
               </div>
             )}
           </div>

@@ -89,6 +89,15 @@ export function IconChevronDown({ className = "size-4" }: { className?: string }
   );
 }
 
+export function IconCamera({ className = "size-4" }: { className?: string }) {
+  return (
+    <svg {...svgProps(className)}>
+      <path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Z" />
+      <circle cx="12" cy="13" r="3.25" />
+    </svg>
+  );
+}
+
 /**
  * Native select dressed like every other field on the receipt: same
  * border/focus ring as `.field`, plus a chevron so it reads as a dropdown

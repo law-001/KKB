@@ -2,8 +2,13 @@ import { notFound } from "next/navigation";
 import { getExpenseDetail, getGroup, getGroupMembers } from "@/lib/db/queries";
 import { requireGroupMember } from "@/lib/auth";
 import { updateExpense } from "@/server/expenses";
+import { scanReceipt } from "@/server/scan";
 import { ExpenseForm } from "@/components/expense-form";
 import { PageHeader } from "@/components/ui";
+
+// Receipt scanning calls Gemini, which can take longer than the default
+// action timeout. Server-action maxDuration is set at the page level.
+export const maxDuration = 60;
 
 export default async function EditExpensePage(props: {
   params: Promise<{ groupId: string; expenseId: string }>;
@@ -53,6 +58,9 @@ export default async function EditExpensePage(props: {
             split: detail.expense.splitInput ?? null,
           }}
           submitAction={updateExpense.bind(null, expenseId)}
+          scanAction={
+            process.env.GEMINI_API_KEY ? scanReceipt.bind(null, groupId) : undefined
+          }
         />
       </div>
     </div>
